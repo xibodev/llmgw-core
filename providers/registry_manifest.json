@@ -59,10 +59,11 @@
   {
     "id": "openai_codex",
     "aliases": [
-      "codex"
+      "codex",
+      "chatgpt"
     ],
     "label": "OpenAI Codex",
-    "description": "Owner-private Codex device authorization with the verified Responses transport. Requires an OAuth client ID the operator is authorized to use.",
+    "description": "Owner-private Codex device authorization with the verified Responses transport. Authenticate with your ChatGPT / OpenAI account.",
     "categories": [
       "coding",
       "oauth",
@@ -79,13 +80,11 @@
     "supports_api_adaptation": true,
     "supports_model_discovery": true,
     "onboarding_fields": [
-      "human_owner",
-      "client_id"
+      "human_owner"
     ],
     "auth_adapter": "openai_codex",
     "quota_adapter": "openai_codex",
-    "risk_level": "yellow",
-    "risk_notice": "Experimental. OpenAI does not currently document third-party Codex OAuth client registration. The gateway intentionally does not embed or impersonate the official Codex CLI client ID; configure only a client ID you are authorized to operate.",
+    "risk_level": "green",
     "docs_url": "https://developers.openai.com/codex/"
   },
   {

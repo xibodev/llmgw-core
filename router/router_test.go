@@ -77,4 +77,12 @@ func TestRouterResolutionRoutePolicyAndCircuitBreaker(t *testing.T) {
 	if len(targets) != 2 {
 		t.Fatalf("expected copilot recovered, got: %+v", targets)
 	}
+
+	res, err := r.ResolveResolution(context.Background(), nil, "smart")
+	if err != nil {
+		t.Fatalf("unexpected error on ResolveResolution: %v", err)
+	}
+	if res.Category != "smart" || len(res.Targets) != 2 {
+		t.Fatalf("unexpected resolution: %+v", res)
+	}
 }

@@ -84,6 +84,15 @@ func NewRouter(routes map[string]core.RouteConfig, policy core.PolicyGate) *Rout
 
 // Resolve returns ordered valid targets for a given model request and principal.
 func (r *Router) Resolve(ctx context.Context, principal *core.Principal, requested string) ([]core.Target, error) {
+	resolution, err := r.ResolveResolution(ctx, principal, requested)
+	if err != nil {
+		return nil, err
+	}
+	return resolution.Targets, nil
+}
+
+// ResolveResolution returns ordered valid targets and category name for a given model request and principal.
+func (r *Router) ResolveResolution(ctx context.Context, principal *core.Principal, requested string) (core.Resolution, error) {
 	if route, exists := r.routes[requested]; exists {
 		var candidates []core.Target
 		for _, target := range route.Targets {
@@ -96,9 +105,9 @@ func (r *Router) Resolve(ctx context.Context, principal *core.Principal, request
 			}
 		}
 		if len(candidates) == 0 {
-			return nil, fmt.Errorf("no available targets for route %q (all targets circuit-broken or denied by policy)", requested)
+			return core.Resolution{}, fmt.Errorf("no available targets for route %q (all targets circuit-broken or denied by policy)", requested)
 		}
-		return candidates, nil
+		return core.Resolution{Targets: candidates, Category: requested}, nil
 	}
 
 	// Direct provider/model target (e.g. "openai/gpt-4o" or "copilot/claude-opus-5")
@@ -124,10 +133,10 @@ func (r *Router) Resolve(ctx context.Context, principal *core.Principal, request
 
 	allowed, reason := r.policy.Allows(ctx, principal, target)
 	if !allowed {
-		return nil, fmt.Errorf("access denied to target %s/%s: %s", target.Provider, target.Model, reason)
+		return core.Resolution{}, fmt.Errorf("access denied to target %s/%s: %s", target.Provider, target.Model, reason)
 	}
 
-	return []core.Target{target}, nil
+	return core.Resolution{Targets: []core.Target{target}}, nil
 }
 
 func (r *Router) RecordResult(provider string, err error) {

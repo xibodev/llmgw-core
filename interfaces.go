@@ -21,6 +21,13 @@ type Target struct {
 	Model    string `json:"model"`
 }
 
+// Resolution records both the resolved targets and the canonical category name,
+// when the request addressed a category rather than a direct model.
+type Resolution struct {
+	Targets  []Target `json:"targets"`
+	Category string   `json:"category,omitempty"`
+}
+
 // Credential contains authentication secrets for an upstream provider.
 type Credential struct {
 	APIKey             string            `json:"api_key,omitempty"`

@@ -1,0 +1,657 @@
+[
+  {
+    "id": "github_copilot",
+    "aliases": [
+      "copilot"
+    ],
+    "label": "GitHub Copilot",
+    "description": "Use a personal GitHub Copilot subscription through official device authorization.",
+    "categories": [
+      "coding",
+      "oauth",
+      "subscription"
+    ],
+    "runtime_type": "github_copilot",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "oauth_device"
+    ],
+    "connection_scope": "personal",
+    "default_provider_id": "copilot",
+    "supports_api_adaptation": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "human_owner"
+    ],
+    "auth_adapter": "github_copilot",
+    "quota_adapter": "github_copilot",
+    "risk_level": "yellow",
+    "risk_notice": "Personal Copilot entitlements remain owner-private and may not be shared across principals.",
+    "docs_url": "https://docs.github.com/en/copilot"
+  },
+  {
+    "id": "claude_code",
+    "aliases": [
+      "claude"
+    ],
+    "label": "Claude Code",
+    "description": "Gateway client setup for the documented Anthropic protocol. Configure an Anthropic API key or supported gateway credential upstream.",
+    "categories": [
+      "coding",
+      "gateway-client"
+    ],
+    "runtime_type": "anthropic",
+    "protocol": "anthropic",
+    "availability": "client_only",
+    "auth_methods": [
+      "gateway_client"
+    ],
+    "connection_scope": "gateway_client",
+    "default_provider_id": "claude",
+    "onboarding_fields": [
+      "gateway_url"
+    ],
+    "risk_level": "green",
+    "docs_url": "https://docs.anthropic.com/en/docs/claude-code",
+    "client_only": true
+  },
+  {
+    "id": "openai_codex",
+    "aliases": [
+      "codex"
+    ],
+    "label": "OpenAI Codex",
+    "description": "Owner-private Codex device authorization with the verified Responses transport. Requires an OAuth client ID the operator is authorized to use.",
+    "categories": [
+      "coding",
+      "oauth",
+      "subscription"
+    ],
+    "runtime_type": "openai_compatible",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "oauth_device"
+    ],
+    "connection_scope": "personal",
+    "default_provider_id": "codex",
+    "supports_api_adaptation": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "human_owner",
+      "client_id"
+    ],
+    "auth_adapter": "openai_codex",
+    "quota_adapter": "openai_codex",
+    "risk_level": "yellow",
+    "risk_notice": "Experimental. OpenAI does not currently document third-party Codex OAuth client registration. The gateway intentionally does not embed or impersonate the official Codex CLI client ID; configure only a client ID you are authorized to operate.",
+    "docs_url": "https://developers.openai.com/codex/"
+  },
+  {
+    "id": "openai",
+    "label": "OpenAI",
+    "description": "OpenAI API models using a project API key.",
+    "categories": [
+      "api-key",
+      "direct"
+    ],
+    "runtime_type": "openai_compatible",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "api_key"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "openai",
+    "default_base_url": "https://api.openai.com/v1",
+    "requires_api_key": true,
+    "supports_api_adaptation": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "api_key"
+    ],
+    "risk_level": "green",
+    "docs_url": "https://platform.openai.com/docs/api-reference"
+  },
+  {
+    "id": "anthropic",
+    "label": "Anthropic",
+    "description": "Native Anthropic Messages API using an Anthropic API key.",
+    "categories": [
+      "api-key",
+      "direct"
+    ],
+    "runtime_type": "anthropic",
+    "protocol": "anthropic",
+    "availability": "available",
+    "auth_methods": [
+      "api_key"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "anthropic",
+    "default_base_url": "https://api.anthropic.com",
+    "requires_api_key": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "api_key"
+    ],
+    "risk_level": "green",
+    "docs_url": "https://docs.anthropic.com/en/api"
+  },
+  {
+    "id": "gemini",
+    "aliases": [
+      "google"
+    ],
+    "label": "Google Gemini",
+    "description": "Gemini models through Google's official OpenAI-compatible endpoint.",
+    "categories": [
+      "api-key",
+      "direct"
+    ],
+    "runtime_type": "openai_compatible",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "api_key"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "gemini",
+    "default_base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "requires_api_key": true,
+    "supports_api_adaptation": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "api_key"
+    ],
+    "risk_level": "green",
+    "docs_url": "https://ai.google.dev/gemini-api/docs/openai"
+  },
+  {
+    "id": "ai_studio",
+    "label": "Google AI Studio",
+    "description": "Gemini models through the AI Studio API key surface, including image and Veo video generation.",
+    "categories": [
+      "chat",
+      "image",
+      "video"
+    ],
+    "runtime_type": "ai_studio",
+    "protocol": "gemini",
+    "availability": "available",
+    "auth_methods": [
+      "api_key"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "ai_studio",
+    "default_base_url": "https://generativelanguage.googleapis.com/v1beta",
+    "requires_api_key": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "api_key"
+    ],
+    "risk_level": "green",
+    "docs_url": "https://ai.google.dev/gemini-api/docs"
+  },
+  {
+    "id": "vertex_ai",
+    "label": "Vertex AI (Agent Platform)",
+    "description": "Gemini, Imagen and Veo through Google Cloud Agent Platform, billed to your Cloud billing account.",
+    "categories": [
+      "chat",
+      "image",
+      "video"
+    ],
+    "runtime_type": "vertex_ai",
+    "protocol": "gemini",
+    "availability": "available",
+    "auth_methods": [
+      "api_key",
+      "gcp_service_account"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "vertex_ai",
+    "default_location": "global",
+    "requires_api_key": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "api_key",
+      "project",
+      "location"
+    ],
+    "risk_level": "yellow",
+    "risk_notice": "Requires a Google Cloud project id. The API key must be bound to a service account with Agent Platform access, and model availability varies by location — 'global' carries the widest selection. A service account key may be uploaded instead of an API key; it is stored encrypted and exchanged for short-lived access tokens.",
+    "docs_url": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs"
+  },
+  {
+    "id": "openrouter",
+    "label": "OpenRouter",
+    "description": "Multi-vendor model access through the OpenRouter API.",
+    "categories": [
+      "aggregator",
+      "api-key"
+    ],
+    "runtime_type": "openai_compatible",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "api_key"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "openrouter",
+    "default_base_url": "https://openrouter.ai/api/v1",
+    "requires_api_key": true,
+    "supports_api_adaptation": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "api_key"
+    ],
+    "risk_level": "green",
+    "docs_url": "https://openrouter.ai/docs/api-reference/overview"
+  },
+  {
+    "id": "groq",
+    "label": "Groq",
+    "description": "Low-latency hosted models through Groq's OpenAI-compatible API.",
+    "categories": [
+      "api-key",
+      "direct"
+    ],
+    "runtime_type": "openai_compatible",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "api_key"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "groq",
+    "default_base_url": "https://api.groq.com/openai/v1",
+    "requires_api_key": true,
+    "supports_api_adaptation": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "api_key"
+    ],
+    "risk_level": "green",
+    "docs_url": "https://console.groq.com/docs/api-reference"
+  },
+  {
+    "id": "mistral",
+    "label": "Mistral AI",
+    "description": "Mistral-hosted models through its OpenAI-compatible API.",
+    "categories": [
+      "api-key",
+      "direct"
+    ],
+    "runtime_type": "openai_compatible",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "api_key"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "mistral",
+    "default_base_url": "https://api.mistral.ai/v1",
+    "requires_api_key": true,
+    "supports_api_adaptation": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "api_key"
+    ],
+    "risk_level": "green",
+    "docs_url": "https://docs.mistral.ai/api/"
+  },
+  {
+    "id": "cerebras",
+    "label": "Cerebras",
+    "description": "Cerebras inference models through its OpenAI-compatible API.",
+    "categories": [
+      "api-key",
+      "direct"
+    ],
+    "runtime_type": "openai_compatible",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "api_key"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "cerebras",
+    "default_base_url": "https://api.cerebras.ai/v1",
+    "requires_api_key": true,
+    "supports_api_adaptation": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "api_key"
+    ],
+    "risk_level": "green",
+    "docs_url": "https://inference-docs.cerebras.ai/api-reference"
+  },
+  {
+    "id": "bedrock",
+    "label": "Amazon Bedrock",
+    "description": "Amazon Bedrock model access using a bearer API key and AWS region.",
+    "categories": [
+      "api-key",
+      "enterprise",
+      "cloud"
+    ],
+    "runtime_type": "bedrock",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "api_key"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "bedrock",
+    "default_region": "us-east-1",
+    "requires_api_key": true,
+    "supports_api_adaptation": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "api_key",
+      "region"
+    ],
+    "risk_level": "green",
+    "docs_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html"
+  },
+  {
+    "id": "azure_openai",
+    "label": "Azure OpenAI",
+    "description": "An Azure OpenAI resource's own deployments, addressed with an api-key credential. The catalog is read from the resource's deployments, never the shared Azure model list.",
+    "categories": [
+      "chat",
+      "api-key",
+      "enterprise"
+    ],
+    "runtime_type": "azure_openai",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "api_key"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "azure_openai",
+    "requires_base_url": true,
+    "requires_api_key": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "api_key",
+      "base_url"
+    ],
+    "risk_level": "yellow",
+    "risk_notice": "Requires an existing Azure OpenAI resource with at least one deployment already created; the request model id is the deployment name, not the underlying model name. Model discovery depends on a legacy, pinned Azure api-version (2023-03-15-preview) for listing deployments — if Microsoft removes that route, the catalog becomes undiscoverable until Entra-based discovery is added.",
+    "docs_url": "https://learn.microsoft.com/en-us/azure/ai-services/openai/reference"
+  },
+  {
+    "id": "ollama",
+    "label": "Ollama",
+    "description": "Local Ollama models without a credential.",
+    "categories": [
+      "local",
+      "no-auth"
+    ],
+    "runtime_type": "ollama",
+    "protocol": "ollama",
+    "availability": "available",
+    "auth_methods": [
+      "none"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "ollama",
+    "default_base_url": "http://127.0.0.1:11434",
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "base_url"
+    ],
+    "risk_level": "green",
+    "docs_url": "https://docs.ollama.com/api"
+  },
+  {
+    "id": "localai",
+    "label": "LocalAI",
+    "description": "Self-hosted LocalAI through its OpenAI-compatible endpoint.",
+    "categories": [
+      "local",
+      "api-key",
+      "no-auth"
+    ],
+    "runtime_type": "openai_compatible",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "api_key",
+      "none"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "localai",
+    "default_base_url": "http://127.0.0.1:8080/v1",
+    "supports_api_adaptation": true,
+    "supports_model_discovery": true,
+    "infer_audio_capabilities": true,
+    "onboarding_fields": [
+      "base_url",
+      "api_key"
+    ],
+    "risk_level": "green",
+    "docs_url": "https://localai.io/features/openai-functions/"
+  },
+  {
+    "id": "edge_tts",
+    "label": "Edge TTS",
+    "description": "Microsoft Edge read-aloud voices as an OpenAI-compatible speech endpoint. No credential required.",
+    "categories": [
+      "audio",
+      "no-auth"
+    ],
+    "runtime_type": "edge_tts",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "none"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "edge_tts",
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "base_url"
+    ],
+    "risk_level": "yellow",
+    "risk_notice": "Uses the public Microsoft Edge read-aloud service with a well-known shared access token. The endpoint and token are unofficial and may change; both can be overridden in this provider's configuration (base_url, api_key) without rebuilding the gateway.",
+    "docs_url": "https://learn.microsoft.com/en-us/microsoft-edge/"
+  },
+  {
+    "id": "custom_openai",
+    "aliases": [
+      "openai-compatible"
+    ],
+    "label": "Custom OpenAI-compatible",
+    "description": "Any OpenAI-compatible endpoint with an optional bearer API key.",
+    "categories": [
+      "custom",
+      "api-key",
+      "no-auth"
+    ],
+    "runtime_type": "openai_compatible",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "api_key",
+      "none"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "custom",
+    "requires_base_url": true,
+    "supports_api_adaptation": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "base_url",
+      "api_key"
+    ],
+    "risk_level": "green"
+  },
+  {
+    "id": "opencode_zen",
+    "aliases": [
+      "opencode",
+      "zen",
+      "opencode-zen"
+    ],
+    "label": "OpenCode Zen",
+    "description": "Free anonymous European multi-model API hosted by OpenCode with no API key or sign up required.",
+    "categories": [
+      "free",
+      "no-auth",
+      "coding"
+    ],
+    "runtime_type": "openai_compatible",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "none",
+      "api_key"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "opencode-zen",
+    "default_base_url": "https://opencode.ai/zen/v1",
+    "requires_base_url": true,
+    "requires_api_key": false,
+    "supports_api_adaptation": true,
+    "supports_model_discovery": true,
+    "anonymous_automation": true,
+    "onboarding_fields": [
+      "base_url"
+    ],
+    "risk_level": "green",
+    "docs_url": "https://opencode.ai/zen"
+  },
+  {
+    "id": "kilo_code",
+    "aliases": [
+      "kilo",
+      "kilo-code"
+    ],
+    "label": "Kilo Code",
+    "description": "Free anonymous multi-model API with no API key or sign up required. Includes kilo-auto/free and popular open-source models.",
+    "categories": [
+      "free",
+      "no-auth",
+      "coding"
+    ],
+    "runtime_type": "openai_compatible",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "none",
+      "api_key"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "kilo-code",
+    "default_base_url": "https://api.kilo.ai/api/gateway",
+    "requires_base_url": true,
+    "requires_api_key": false,
+    "supports_api_adaptation": true,
+    "supports_model_discovery": true,
+    "anonymous_automation": true,
+    "onboarding_fields": [
+      "base_url"
+    ],
+    "risk_level": "green",
+    "docs_url": "https://kilo.ai"
+  },
+  {
+    "id": "llm7",
+    "aliases": ["llm7.io"],
+    "label": "LLM7.io",
+    "description": "Anonymous OpenAI-compatible turbo-tier models with no API key required.",
+    "categories": ["free", "no-auth"],
+    "runtime_type": "openai_compatible",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": ["none", "api_key"],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "llm7",
+    "default_base_url": "https://api.llm7.io/v1",
+    "requires_base_url": true,
+    "requires_api_key": false,
+    "supports_api_adaptation": true,
+    "supports_model_discovery": true,
+    "anonymous_automation": true,
+    "onboarding_fields": ["base_url"],
+    "risk_level": "green",
+    "docs_url": "https://llm7.io"
+  },
+  {
+    "id": "ovh_ai_endpoints",
+    "aliases": ["ovh-ai"],
+    "label": "OVH AI Endpoints",
+    "description": "Anonymous OpenAI-compatible inference through OVHcloud's free per-IP tier.",
+    "categories": ["free", "no-auth"],
+    "runtime_type": "openai_compatible",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": ["none", "api_key"],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "ovh-ai",
+    "default_base_url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+    "requires_base_url": true,
+    "requires_api_key": false,
+    "supports_api_adaptation": true,
+    "supports_model_discovery": true,
+    "anonymous_automation": true,
+    "onboarding_fields": ["base_url"],
+    "risk_level": "green",
+    "docs_url": "https://endpoints.ai.cloud.ovh.net"
+  },
+  {
+    "id": "pollinations",
+    "aliases": ["pollinations.ai"],
+    "label": "Pollinations.ai",
+    "description": "Anonymous text inference through Pollinations' OpenAI-compatible endpoint.",
+    "categories": ["free", "no-auth"],
+    "runtime_type": "openai_compatible",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": ["none", "api_key"],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "pollinations",
+    "default_base_url": "https://text.pollinations.ai",
+    "requires_base_url": true,
+    "requires_api_key": false,
+    "supports_api_adaptation": true,
+    "supports_model_discovery": true,
+    "anonymous_automation": true,
+    "onboarding_fields": ["base_url"],
+    "risk_level": "green",
+    "docs_url": "https://pollinations.ai"
+  },
+  {
+    "id": "custom_anthropic",
+    "aliases": [
+      "anthropic-compatible"
+    ],
+    "label": "Custom Anthropic-compatible",
+    "description": "Any endpoint implementing the native Anthropic Messages API.",
+    "categories": [
+      "custom",
+      "api-key"
+    ],
+    "runtime_type": "anthropic",
+    "protocol": "anthropic",
+    "availability": "available",
+    "auth_methods": [
+      "api_key"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "custom-anthropic",
+    "requires_base_url": true,
+    "requires_api_key": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "base_url",
+      "api_key"
+    ],
+    "risk_level": "green"
+  }
+]

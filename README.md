@@ -12,6 +12,7 @@ Headless, embeddable LLM routing engine and resilient multi-provider proxy for G
   - `PolicyGate`: RBAC, project-level, or model-level permission gates.
   - `CredentialResolver`: Dynamic or multi-tenant credential overrides (BYOC).
   - `UsageHook`: Telemetry, cost tracking, and audit logging.
+- **Shared Provider Contracts:** Typed connection/auth kinds, catalog and completion evidence, health classification, exact target publication policy, and a persistence-agnostic `ProviderConnector` interface.
 
 ## Installation
 

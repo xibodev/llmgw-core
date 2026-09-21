@@ -1,0 +1,11 @@
+{
+  "models": [
+    {
+      "slug": "codex-beta-exact",
+      "supported_in_api": false
+    },
+    {
+      "name": "codex-name-identity"
+    }
+  ]
+}

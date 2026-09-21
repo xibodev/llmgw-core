@@ -88,17 +88,17 @@ func (p *OpenAIProvider) Complete(ctx context.Context, model string, payload map
 
 	resp, err := p.Client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("upstream request failed: %w", err)
+		return nil, invocationError(ctx, "upstream request failed", 0, err)
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read upstream response: %w", err)
+		return nil, invocationError(ctx, "read upstream response failed", 0, err)
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("upstream HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+		return nil, invocationError(ctx, fmt.Sprintf("upstream HTTP %d: %s", resp.StatusCode, string(bodyBytes)), resp.StatusCode, nil)
 	}
 
 	var result map[string]any
@@ -140,16 +140,16 @@ func (p *OpenAIProvider) Stream(ctx context.Context, model string, payload map[s
 
 	resp, err := p.Client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("upstream request failed: %w", err)
+		return nil, invocationError(ctx, "upstream request failed", 0, err)
 	}
 
 	if resp.StatusCode >= 400 {
 		defer resp.Body.Close()
 		errBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("upstream HTTP %d: %s", resp.StatusCode, string(errBytes))
+		return nil, invocationError(ctx, fmt.Sprintf("upstream HTTP %d: %s", resp.StatusCode, string(errBytes)), resp.StatusCode, nil)
 	}
 
-	return NewByteStreamIter(resp.Body), nil
+	return newByteStreamIter(ctx, resp.Body), nil
 }
 
 func (p *OpenAIProvider) ListModels(ctx context.Context, cred *core.Credential) ([]core.ModelInfo, error) {

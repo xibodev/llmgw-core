@@ -1,0 +1,12 @@
+{
+  "data": [
+    {
+      "id": "codex-alpha-2026-09",
+      "name": "Human label must not replace ID",
+      "owned_by": "example-vendor",
+      "supported_in_api": true,
+      "visibility": "list",
+      "supported_endpoints": ["/responses"]
+    }
+  ]
+}

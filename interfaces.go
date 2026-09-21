@@ -54,12 +54,13 @@ type UsageRecord struct {
 
 // ModelInfo describes an available upstream model or alias.
 type ModelInfo struct {
-	ID          string   `json:"id"`
-	Object      string   `json:"object"`
-	Created     int64    `json:"created"`
-	OwnedBy     string   `json:"owned_by"`
-	Description string   `json:"description,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
+	ID           string             `json:"id"`
+	Object       string             `json:"object"`
+	Created      int64              `json:"created"`
+	OwnedBy      string             `json:"owned_by"`
+	Description  string             `json:"description,omitempty"`
+	Tags         []string           `json:"tags,omitempty"`
+	Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
 }
 
 // Authenticator authenticates an incoming HTTP request.

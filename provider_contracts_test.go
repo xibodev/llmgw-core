@@ -43,6 +43,19 @@ func TestProviderConnectionDoesNotMarshalCredential(t *testing.T) {
 	}
 }
 
+func TestPersonalAPIKeyIsNotASubscriptionConnection(t *testing.T) {
+	connection := core.ProviderConnection{
+		ProviderID: "openai", Kind: core.ProviderConnectionPersonal,
+		AuthKind: core.ProviderAuthAPIKey, OwnerID: "owner-1",
+	}
+	if err := connection.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if connection.Kind == core.ProviderConnectionPersonalSubscription {
+		t.Fatal("personal API key was classified as a subscription")
+	}
+}
+
 func TestCatalogDiscoveryDoesNotVerifyInference(t *testing.T) {
 	catalog := core.CatalogEvidence{
 		Status: core.CatalogDiscovered,
@@ -68,6 +81,7 @@ func TestClassifyProviderFailure(t *testing.T) {
 		{name: "forbidden", failure: core.ProviderFailure{StatusCode: 403}, class: core.ProviderErrorForbidden, permanent: true},
 		{name: "rate limited", failure: core.ProviderFailure{StatusCode: 429, RetryAfter: "17", ObservedAt: now}, class: core.ProviderErrorRateLimited, retryable: true, retry: 17 * time.Second},
 		{name: "transport", failure: core.ProviderFailure{Err: errors.New("connection reset")}, class: core.ProviderErrorTransport, retryable: true},
+		{name: "redirect", failure: core.ProviderFailure{StatusCode: 302}, class: core.ProviderErrorUpstream},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ type ProviderConnectionKind string
 
 const (
 	ProviderConnectionSystem               ProviderConnectionKind = "system"
+	ProviderConnectionPersonal             ProviderConnectionKind = "personal"
 	ProviderConnectionPersonalSubscription ProviderConnectionKind = "personal_subscription"
 	ProviderConnectionAnonymous            ProviderConnectionKind = "anonymous"
 )
@@ -21,9 +23,13 @@ const (
 type ProviderAuthKind string
 
 const (
-	ProviderAuthAPIKey      ProviderAuthKind = "api_key"
-	ProviderAuthOAuthDevice ProviderAuthKind = "oauth_device"
-	ProviderAuthAnonymous   ProviderAuthKind = "anonymous"
+	ProviderAuthAPIKey           ProviderAuthKind = "api_key"
+	ProviderAuthOAuthDevice      ProviderAuthKind = "oauth_device"
+	ProviderAuthOAuthBrowser     ProviderAuthKind = "oauth_browser"
+	ProviderAuthServiceAccount   ProviderAuthKind = "service_account"
+	ProviderAuthWorkloadIdentity ProviderAuthKind = "workload_identity"
+	ProviderAuthOfficialClient   ProviderAuthKind = "official_client"
+	ProviderAuthAnonymous        ProviderAuthKind = "anonymous"
 )
 
 // ProviderConnection is the persistence-agnostic description of a configured
@@ -147,7 +153,7 @@ type ProviderHealthEvidence struct {
 // ClassifyProviderFailure maps HTTP and transport outcomes into stable health semantics.
 func ClassifyProviderFailure(f ProviderFailure) ProviderHealthEvidence {
 	evidence := ProviderHealthEvidence{Status: ProviderHealthUnknown, ErrorClass: ProviderErrorNone, ObservedAt: f.ObservedAt}
-	if f.StatusCode >= 200 && f.StatusCode < 400 && f.Err == nil {
+	if f.StatusCode >= 200 && f.StatusCode < 300 && f.Err == nil {
 		evidence.Status = ProviderHealthHealthy
 		return evidence
 	}
@@ -184,7 +190,7 @@ func parseRetryAfter(value string, observedAt time.Time) time.Duration {
 	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
 		return time.Duration(seconds) * time.Second
 	}
-	if when, err := time.Parse(time.RFC1123, value); err == nil && !observedAt.IsZero() && when.After(observedAt) {
+	if when, err := http.ParseTime(value); err == nil && !observedAt.IsZero() && when.After(observedAt) {
 		return when.Sub(observedAt)
 	}
 	return 0

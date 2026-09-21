@@ -2,10 +2,12 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -141,6 +143,34 @@ type ProviderFailure struct {
 	Err        error     `json:"-"`
 }
 
+// ProviderOperationError preserves classification inputs without exposing an
+// upstream response body or transport error through serialized evidence.
+type ProviderOperationError struct {
+	Failure ProviderFailure
+	Op      string
+}
+
+func (e *ProviderOperationError) Error() string {
+	if e == nil {
+		return "provider operation failed"
+	}
+	if e.Op != "" {
+		return e.Op + " failed"
+	}
+	return "provider operation failed"
+}
+
+func (e *ProviderOperationError) Unwrap() error { return e.Failure.Err }
+
+// NewProviderOperationError creates a classifiable provider error. Callers
+// should not put response bodies, credentials, or private endpoints in op.
+func NewProviderOperationError(op string, statusCode int, retryAfter string, err error) error {
+	return &ProviderOperationError{
+		Op:      op,
+		Failure: ProviderFailure{StatusCode: statusCode, RetryAfter: retryAfter, Err: err},
+	}
+}
+
 type ProviderHealthEvidence struct {
 	Status     ProviderHealthStatus `json:"status"`
 	ErrorClass ProviderErrorClass   `json:"error_class"`
@@ -183,6 +213,16 @@ func ClassifyProviderFailure(f ProviderFailure) ProviderHealthEvidence {
 		evidence.Retryable = f.StatusCode == 408 || f.StatusCode >= 500
 	}
 	return evidence
+}
+
+func classifyProviderError(err error, observedAt time.Time) ProviderHealthEvidence {
+	failure := ProviderFailure{ObservedAt: observedAt, Err: err}
+	var operationError *ProviderOperationError
+	if errors.As(err, &operationError) {
+		failure = operationError.Failure
+		failure.ObservedAt = observedAt
+	}
+	return ClassifyProviderFailure(failure)
 }
 
 func parseRetryAfter(value string, observedAt time.Time) time.Duration {
@@ -238,6 +278,9 @@ func PublishExactTargets(providerID string, catalog CatalogEvidence, probes []Co
 type ProviderConnectRequest struct {
 	Connection        ProviderConnection      `json:"connection"`
 	PublicationPolicy TargetPublicationPolicy `json:"publication_policy"`
+	// AuthenticationValidated permits callers that established authentication
+	// before Connect to omit an adapter authentication validator.
+	AuthenticationValidated bool `json:"authentication_validated,omitempty"`
 }
 
 // ProviderConnectResult is the complete, persistence-agnostic outcome of provider onboarding.
@@ -253,4 +296,131 @@ type ProviderConnectResult struct {
 // probing, classification, and exact target publication.
 type ProviderConnector interface {
 	Connect(ctx context.Context, request ProviderConnectRequest) (ProviderConnectResult, error)
+}
+
+type ProviderAuthenticationValidator func(context.Context, ProviderConnection) error
+type ProviderModelDiscoverer func(context.Context, ProviderConnection) ([]ModelInfo, error)
+type ProviderProbeSelector func(ProviderConnection, []ModelInfo) []Target
+type ProviderCompletionRuntime func(context.Context, ProviderConnection, Target, map[string]any) (map[string]any, error)
+
+// ProviderAdapter contains the small provider-specific operations used by the
+// shared connector. Complete is both the probe and reusable runtime path.
+type ProviderAdapter struct {
+	ValidateAuthentication ProviderAuthenticationValidator
+	DiscoverModels         ProviderModelDiscoverer
+	SelectProbeTargets     ProviderProbeSelector
+	Complete               ProviderCompletionRuntime
+}
+
+// ProviderOrchestrator resolves only explicitly registered adapters. This is
+// particularly important for Codex: its personal subscription OAuth flow must
+// never fall through to anonymous OpenAI-compatible behavior.
+type ProviderOrchestrator struct {
+	mu       sync.RWMutex
+	adapters map[string]ProviderAdapter
+	now      func() time.Time
+}
+
+func NewProviderOrchestrator() *ProviderOrchestrator {
+	return &ProviderOrchestrator{adapters: make(map[string]ProviderAdapter), now: time.Now}
+}
+
+func (o *ProviderOrchestrator) Register(providerID string, adapter ProviderAdapter) error {
+	providerID = strings.ToLower(strings.TrimSpace(providerID))
+	if providerID == "" {
+		return fmt.Errorf("provider id is required")
+	}
+	if adapter.DiscoverModels == nil || adapter.Complete == nil {
+		return fmt.Errorf("provider adapter requires model discovery and completion")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.adapters[providerID] = adapter
+	return nil
+}
+
+func (o *ProviderOrchestrator) Connect(ctx context.Context, request ProviderConnectRequest) (ProviderConnectResult, error) {
+	result := ProviderConnectResult{Connection: request.Connection}
+	if err := request.Connection.Validate(); err != nil {
+		return result, err
+	}
+
+	providerID := strings.ToLower(strings.TrimSpace(request.Connection.ProviderID))
+	if _, err := PublishExactTargets(providerID, CatalogEvidence{}, nil, request.PublicationPolicy); err != nil {
+		return result, err
+	}
+	o.mu.RLock()
+	adapter, ok := o.adapters[providerID]
+	o.mu.RUnlock()
+	if !ok {
+		return result, fmt.Errorf("provider adapter %q is not registered", providerID)
+	}
+	now := o.now
+	if now == nil {
+		now = time.Now
+	}
+
+	if !request.AuthenticationValidated {
+		if adapter.ValidateAuthentication == nil {
+			return result, fmt.Errorf("provider authentication is not validated")
+		}
+		if err := adapter.ValidateAuthentication(ctx, request.Connection); err != nil {
+			observedAt := now()
+			result.Health = classifyProviderError(err, observedAt)
+			result.Catalog = CatalogEvidence{Status: CatalogNotProbed}
+			return result, err
+		}
+	}
+
+	models, err := adapter.DiscoverModels(ctx, request.Connection)
+	observedAt := now()
+	if err != nil {
+		result.Catalog = CatalogEvidence{Status: CatalogFailed, ObservedAt: observedAt}
+		result.Health = classifyProviderError(err, observedAt)
+		return result, err
+	}
+	result.Catalog = CatalogEvidence{Status: CatalogDiscovered, Models: models, ObservedAt: observedAt}
+	if len(models) == 0 {
+		result.Catalog.Status = CatalogEmpty
+		result.Health = ClassifyProviderFailure(ProviderFailure{StatusCode: http.StatusOK, ObservedAt: observedAt})
+		return result, nil
+	}
+
+	targets := defaultProbeTargets(providerID, models)
+	if adapter.SelectProbeTargets != nil {
+		targets = adapter.SelectProbeTargets(request.Connection, models)
+	}
+	result.Health = ClassifyProviderFailure(ProviderFailure{StatusCode: http.StatusOK, ObservedAt: observedAt})
+	for _, target := range targets {
+		if target.Provider == "" {
+			target.Provider = providerID
+		}
+		started := now()
+		_, probeErr := adapter.Complete(ctx, request.Connection, target, map[string]any{
+			"messages":   []any{map[string]any{"role": "user", "content": "Reply with: ok"}},
+			"max_tokens": 16,
+		})
+		finished := now()
+		probe := CompletionProbeEvidence{Target: target, Status: CompletionVerified, ObservedAt: finished, Latency: finished.Sub(started)}
+		if probeErr != nil {
+			probe.Status = CompletionFailed
+			result.Health = classifyProviderError(probeErr, finished)
+		}
+		result.Probes = append(result.Probes, probe)
+	}
+
+	result.Targets, err = PublishExactTargets(providerID, result.Catalog, result.Probes, request.PublicationPolicy)
+	if err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func defaultProbeTargets(providerID string, models []ModelInfo) []Target {
+	for _, model := range models {
+		if modelID := strings.TrimSpace(model.ID); modelID != "" {
+			return []Target{{Provider: providerID, Model: modelID}}
+		}
+	}
+	return nil
 }

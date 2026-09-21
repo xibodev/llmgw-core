@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	core "github.com/xibodev/llmgw-core"
@@ -57,6 +58,100 @@ func TestExperimentalAntigravityListModelsDiscoversProjectAndExactCatalog(t *tes
 		capabilities.Tools != core.SupportSupported || capabilities.Reasoning != core.SupportSupported ||
 		capabilities.Streaming != core.SupportUnknown {
 		t.Fatalf("capabilities = %#v", capabilities)
+	}
+}
+
+func TestExperimentalAntigravityCompleteRecoversOneUnauthorizedResponse(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := requests.Add(1)
+		if call == 1 {
+			if r.Header.Get("Authorization") != "Bearer old-token" {
+				t.Errorf("first authorization = %q", r.Header.Get("Authorization"))
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer new-token" {
+			t.Errorf("retry authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"recovered\"}]}}]}}\n\n"))
+	}))
+	defer server.Close()
+
+	var token atomic.Value
+	token.Store("old-token")
+	provider := NewExperimentalAntigravityProvider(func(context.Context) (string, string, error) {
+		return token.Load().(string), "project-id", nil
+	}, server.Client(), server.URL)
+	var recoveries atomic.Int32
+	provider.SetUnauthorizedHandler(func(_ context.Context, rejected string) error {
+		if rejected != "old-token" {
+			t.Fatalf("rejected token = %q", rejected)
+		}
+		recoveries.Add(1)
+		token.Store("new-token")
+		return nil
+	})
+	response, err := provider.Complete(context.Background(), "model", map[string]any{
+		"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+	}, nil)
+	if err != nil || response == nil || requests.Load() != 2 || recoveries.Load() != 1 {
+		t.Fatalf("response=%v err=%v requests=%d recoveries=%d", response, err, requests.Load(), recoveries.Load())
+	}
+}
+
+func TestExperimentalAntigravityCatalogRecoversUnauthorizedOnlyOnce(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	provider := NewExperimentalAntigravityProvider(func(context.Context) (string, string, error) {
+		return "rejected-token", "project-id", nil
+	}, server.Client(), server.URL)
+	var recoveries atomic.Int32
+	provider.SetUnauthorizedHandler(func(context.Context, string) error {
+		recoveries.Add(1)
+		return nil
+	})
+	_, err := provider.ListModels(context.Background(), nil)
+	var operationError *core.ProviderOperationError
+	if !errors.As(err, &operationError) || operationError.Failure.StatusCode != http.StatusUnauthorized ||
+		requests.Load() != 2 || recoveries.Load() != 1 {
+		t.Fatalf("err=%v requests=%d recoveries=%d", err, requests.Load(), recoveries.Load())
+	}
+}
+
+func TestExperimentalAntigravityReportsDiscoveredProject(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1internal:loadCodeAssist":
+			_, _ = w.Write([]byte(`{"cloudaicompanionProject":"discovered-project"}`))
+		case "/v1internal:fetchAvailableModels":
+			_, _ = w.Write([]byte(`{"models":{}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewExperimentalAntigravityProvider(func(context.Context) (string, string, error) {
+		return "access-token", "", nil
+	}, server.Client(), server.URL)
+	var observedToken, observedProject string
+	provider.SetProjectObserver(func(_ context.Context, token, project string) error {
+		observedToken, observedProject = token, project
+		return nil
+	})
+	if _, err := provider.ListModels(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if observedToken != "access-token" || observedProject != "discovered-project" {
+		t.Fatalf("observation = %q, %q", observedToken, observedProject)
 	}
 }
 

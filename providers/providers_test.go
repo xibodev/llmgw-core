@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	core "github.com/xibodev/llmgw-core"
@@ -42,6 +44,60 @@ func TestRegistryIntegrityAndManifest(t *testing.T) {
 		t.Fatalf("expected canonical id 'opencode_zen', got %s", canonical)
 	}
 }
+
+func TestByteStreamIterFramesSplitAndCoalescedSSERecords(t *testing.T) {
+	reader := &chunkReader{chunks: [][]byte{
+		[]byte("data: fir"),
+		[]byte("st\n\ndata: second\n\ndata: third"),
+		[]byte("\n\n"),
+	}}
+	iter := providers.NewByteStreamIter(reader)
+	defer iter.Close()
+
+	want := []string{"data: first\n\n", "data: second\n\n", "data: third\n\n"}
+	for i, expected := range want {
+		frame, err := iter.Next()
+		if err != nil || string(frame) != expected {
+			t.Fatalf("frame %d=%q err=%v, want %q", i, frame, err, expected)
+		}
+	}
+	if frame, err := iter.Next(); len(frame) != 0 || err != io.EOF {
+		t.Fatalf("terminal frame=%q err=%v", frame, err)
+	}
+}
+
+func TestByteStreamIterRejectsTruncatedSSERecord(t *testing.T) {
+	iter := providers.NewByteStreamIter(&chunkReader{chunks: [][]byte{[]byte("data: truncated")}})
+	defer iter.Close()
+
+	if frame, err := iter.Next(); len(frame) != 0 || err == nil {
+		t.Fatalf("frame=%q err=%v", frame, err)
+	}
+}
+
+func TestByteStreamIterRejectsOversizedSSERecord(t *testing.T) {
+	iter := providers.NewByteStreamIter(io.NopCloser(strings.NewReader("data: " + strings.Repeat("x", 1<<20) + "\n\n")))
+	defer iter.Close()
+
+	if frame, err := iter.Next(); len(frame) != 0 || err == nil {
+		t.Fatalf("frame length=%d err=%v", len(frame), err)
+	}
+}
+
+type chunkReader struct {
+	chunks [][]byte
+}
+
+func (r *chunkReader) Read(p []byte) (int, error) {
+	if len(r.chunks) == 0 {
+		return 0, io.EOF
+	}
+	chunk := r.chunks[0]
+	r.chunks = r.chunks[1:]
+	return copy(p, chunk), nil
+}
+
+func (*chunkReader) Close() error { return nil }
 
 func TestAnonymousProfiles(t *testing.T) {
 	profiles := providers.AnonymousProviderProfiles()
@@ -80,17 +136,46 @@ func TestErrorClassification(t *testing.T) {
 		t.Fatal("expected throttle detection from 429 status")
 	}
 
-	retryableErr := &providers.InvocationError{Status: 503}
-	if !providers.InvocationRetryable(retryableErr) {
-		t.Fatal("expected 503 to be retryable")
-	}
-	if !providers.InvocationFailoverEligible(retryableErr) {
-		t.Fatal("expected 503 to be failover eligible")
+	for _, status := range []int{500, 502, 503, 504} {
+		retryableErr := &providers.InvocationError{Status: status}
+		if !providers.InvocationRetryable(retryableErr) {
+			t.Errorf("expected %d to be retryable", status)
+		}
+		if !providers.InvocationFailoverEligible(retryableErr) {
+			t.Errorf("expected %d to be failover eligible", status)
+		}
+		if !providers.InvocationCircuitFailure(retryableErr) {
+			t.Errorf("expected retryable %d to count as a circuit failure", status)
+		}
 	}
 
 	unrecoverableErr := &providers.InvocationError{Status: 401}
 	if providers.InvocationRetryable(unrecoverableErr) {
 		t.Fatal("401 should not be retryable")
+	}
+	if providers.InvocationCircuitFailure(unrecoverableErr) {
+		t.Fatal("401 should not count as a circuit failure")
+	}
+
+	statusZero := &providers.InvocationError{Retryable: true}
+	if !providers.InvocationRetryable(statusZero) || providers.InvocationFailoverEligible(statusZero) {
+		t.Fatal("status-zero retry and failover flags must be honored independently")
+	}
+	statusZero.FailoverEligible = true
+	if !providers.InvocationFailoverEligible(statusZero) {
+		t.Fatal("explicit status-zero failover flag was ignored")
+	}
+	canceled := &providers.InvocationError{
+		Retryable: true, FailoverEligible: true, CircuitFailure: true, Cause: context.Canceled,
+	}
+	if providers.InvocationRetryable(canceled) || providers.InvocationFailoverEligible(canceled) || providers.InvocationCircuitFailure(canceled) {
+		t.Fatal("caller cancellation must not retry, fail over, or trip a circuit")
+	}
+	deadline := &providers.InvocationError{
+		Retryable: true, FailoverEligible: true, CircuitFailure: true, Cause: context.DeadlineExceeded,
+	}
+	if providers.InvocationRetryable(deadline) || providers.InvocationFailoverEligible(deadline) || providers.InvocationCircuitFailure(deadline) {
+		t.Fatal("caller deadline must not retry, fail over, or trip a circuit")
 	}
 }
 

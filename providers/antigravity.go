@@ -37,12 +37,22 @@ var ErrExperimentalAntigravityStreamingUnsupported = errors.New("experimental an
 // loadCodeAssist discovery. The adapter never persists either value.
 type AntigravityTokenSource func(ctx context.Context) (accessToken, projectID string, err error)
 
+// AntigravityUnauthorizedHandler lets an owner recover a token rejected by the
+// upstream service. The adapter invokes it at most once per operation.
+type AntigravityUnauthorizedHandler func(ctx context.Context, rejectedAccessToken string) error
+
+// AntigravityProjectObserver reports project discovery without assuming how or
+// whether the owner stores it.
+type AntigravityProjectObserver func(ctx context.Context, accessToken, projectID string) error
+
 // ExperimentalAntigravityProvider is a storage-neutral experimental adapter
 // for Google's undocumented Cloud Code Assist v1internal API.
 type ExperimentalAntigravityProvider struct {
-	tokenSource AntigravityTokenSource
-	client      *http.Client
-	baseURL     string
+	tokenSource  AntigravityTokenSource
+	unauthorized AntigravityUnauthorizedHandler
+	project      AntigravityProjectObserver
+	client       *http.Client
+	baseURL      string
 }
 
 // NewExperimentalAntigravityProvider constructs the opt-in experimental
@@ -62,15 +72,43 @@ func NewExperimentalAntigravityProvider(tokenSource AntigravityTokenSource, clie
 	}
 }
 
+// SetUnauthorizedHandler configures one-shot recovery from an upstream 401.
+func (p *ExperimentalAntigravityProvider) SetUnauthorizedHandler(handler AntigravityUnauthorizedHandler) {
+	p.unauthorized = handler
+}
+
+// SetProjectObserver configures notification when loadCodeAssist discovers a
+// project that was absent from the token source.
+func (p *ExperimentalAntigravityProvider) SetProjectObserver(observer AntigravityProjectObserver) {
+	p.project = observer
+}
+
 func (p *ExperimentalAntigravityProvider) ListModels(ctx context.Context, _ *core.Credential) ([]core.ModelInfo, error) {
+	models, rejectedToken, err := p.listModels(ctx)
+	recovered, recoveryErr := p.recoverUnauthorized(ctx, rejectedToken, err)
+	if recoveryErr != nil {
+		return nil, recoveryErr
+	}
+	if recovered {
+		models, _, err = p.listModels(ctx)
+	}
+	return models, err
+}
+
+func (p *ExperimentalAntigravityProvider) listModels(ctx context.Context) ([]core.ModelInfo, string, error) {
 	token, projectID, err := p.authentication(ctx)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if projectID == "" {
 		projectID, err = p.loadCodeAssist(ctx, token)
 		if err != nil {
-			return nil, err
+			return nil, token, err
+		}
+		if p.project != nil {
+			if err := p.project(ctx, token, projectID); err != nil {
+				return nil, token, fmt.Errorf("antigravity project observation: %w", err)
+			}
 		}
 	}
 
@@ -82,7 +120,7 @@ func (p *ExperimentalAntigravityProvider) ListModels(ctx context.Context, _ *cor
 	if err := p.postJSON(ctx, token, "/v1internal:fetchAvailableModels", map[string]any{
 		"project": projectID,
 	}, "antigravity model discovery", &response, false); err != nil {
-		return nil, err
+		return nil, token, err
 	}
 
 	ids := make([]string, 0, len(response.Models))
@@ -120,27 +158,44 @@ func (p *ExperimentalAntigravityProvider) ListModels(ctx context.Context, _ *cor
 			},
 		})
 	}
-	return models, nil
+	return models, token, nil
 }
 
 func (p *ExperimentalAntigravityProvider) Complete(ctx context.Context, model string, payload map[string]any, _ *core.Credential) (map[string]any, error) {
+	response, rejectedToken, err := p.complete(ctx, model, payload)
+	recovered, recoveryErr := p.recoverUnauthorized(ctx, rejectedToken, err)
+	if recoveryErr != nil {
+		return nil, recoveryErr
+	}
+	if recovered {
+		response, _, err = p.complete(ctx, model, payload)
+	}
+	return response, err
+}
+
+func (p *ExperimentalAntigravityProvider) complete(ctx context.Context, model string, payload map[string]any) (map[string]any, string, error) {
 	if strings.TrimSpace(model) == "" {
-		return nil, fmt.Errorf("antigravity model is required")
+		return nil, "", fmt.Errorf("antigravity model is required")
 	}
 	token, projectID, err := p.authentication(ctx)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if projectID == "" {
 		projectID, err = p.loadCodeAssist(ctx, token)
 		if err != nil {
-			return nil, err
+			return nil, token, err
+		}
+		if p.project != nil {
+			if err := p.project(ctx, token, projectID); err != nil {
+				return nil, token, fmt.Errorf("antigravity project observation: %w", err)
+			}
 		}
 	}
 
 	request, err := mapAntigravityRequest(payload)
 	if err != nil {
-		return nil, err
+		return nil, token, err
 	}
 	requestID := newAntigravityID("agent")
 	envelope := map[string]any{
@@ -154,9 +209,25 @@ func (p *ExperimentalAntigravityProvider) Complete(ctx context.Context, model st
 
 	var body bytes.Buffer
 	if err := p.postJSON(ctx, token, "/v1internal:streamGenerateContent?alt=sse", envelope, "antigravity completion", &body, true); err != nil {
-		return nil, err
+		return nil, token, err
 	}
-	return parseAntigravitySSE(&body, model, requestID)
+	response, err := parseAntigravitySSE(&body, model, requestID)
+	return response, token, err
+}
+
+func (p *ExperimentalAntigravityProvider) recoverUnauthorized(ctx context.Context, rejectedToken string, err error) (bool, error) {
+	if p.unauthorized == nil || !antigravityHTTPStatus(err, http.StatusUnauthorized) {
+		return false, nil
+	}
+	if recoveryErr := p.unauthorized(ctx, rejectedToken); recoveryErr != nil {
+		return false, fmt.Errorf("antigravity unauthorized recovery: %w", recoveryErr)
+	}
+	return true, nil
+}
+
+func antigravityHTTPStatus(err error, status int) bool {
+	var operationError *core.ProviderOperationError
+	return errors.As(err, &operationError) && operationError.Failure.StatusCode == status
 }
 
 func (p *ExperimentalAntigravityProvider) Stream(context.Context, string, map[string]any, *core.Credential) (StreamIter, error) {

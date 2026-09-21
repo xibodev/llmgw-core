@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	core "github.com/xibodev/llmgw-core"
 	"github.com/xibodev/llm-translate"
+	core "github.com/xibodev/llmgw-core"
 )
 
 // AnthropicProvider is a client for the Anthropic Messages API.
@@ -86,17 +86,17 @@ func (p *AnthropicProvider) Complete(ctx context.Context, model string, payload 
 
 	resp, err := p.Client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic request failed: %w", err)
+		return nil, invocationError(ctx, "anthropic request failed", 0, err)
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read anthropic response: %w", err)
+		return nil, invocationError(ctx, "read anthropic response failed", 0, err)
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("anthropic HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+		return nil, invocationError(ctx, fmt.Sprintf("anthropic HTTP %d: %s", resp.StatusCode, string(bodyBytes)), resp.StatusCode, nil)
 	}
 
 	var anthropicResp map[string]any
@@ -152,16 +152,16 @@ func (p *AnthropicProvider) Stream(ctx context.Context, model string, payload ma
 
 	resp, err := p.Client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic stream request failed: %w", err)
+		return nil, invocationError(ctx, "anthropic stream request failed", 0, err)
 	}
 
 	if resp.StatusCode >= 400 {
 		defer resp.Body.Close()
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("anthropic HTTP %d: %s", resp.StatusCode, string(b))
+		return nil, invocationError(ctx, fmt.Sprintf("anthropic HTTP %d: %s", resp.StatusCode, string(b)), resp.StatusCode, nil)
 	}
 
-	return NewByteStreamIter(resp.Body), nil
+	return newByteStreamIter(ctx, resp.Body), nil
 }
 
 func (p *AnthropicProvider) ListModels(ctx context.Context, cred *core.Credential) ([]core.ModelInfo, error) {

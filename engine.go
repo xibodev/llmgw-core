@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,14 +17,14 @@ import (
 // Engine is the core LLM Gateway routing and proxy engine.
 // It implements http.Handler and can be mounted directly on any router.
 type Engine struct {
-	config     Config
-	mu         sync.RWMutex
-	providers  map[string]any // provider instances
-	routes     map[string]RouteConfig
-	auth       Authenticator
-	policy     PolicyGate
-	resolver   CredentialResolver
-	usageHook  UsageHook
+	config    Config
+	mu        sync.RWMutex
+	providers map[string]any // provider instances
+	routes    map[string]RouteConfig
+	auth      Authenticator
+	policy    PolicyGate
+	resolver  CredentialResolver
+	usageHook UsageHook
 }
 
 func NewEngine(cfg Config) *Engine {
@@ -172,12 +173,21 @@ func (e *Engine) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var lastErr error
+	var lastTarget Target
 	start := time.Now()
 
 	for _, target := range targets {
+		lastTarget = target
 		var cred *Credential
 		if e.resolver != nil {
-			cred, _ = e.resolver.Resolve(r.Context(), principal, target.Provider)
+			cred, err = e.resolver.Resolve(r.Context(), principal, target.Provider)
+			if err != nil {
+				lastErr = err
+				if requestCanceled(r.Context(), err) || !failoverEligible(err) {
+					break
+				}
+				continue
+			}
 		}
 
 		provider := e.getProvider(target.Provider)
@@ -188,54 +198,49 @@ func (e *Engine) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 		// Try streaming or non-streaming via provider interface
 		type streamableProvider interface {
-			Stream(ctx context.Context, model string, payload map[string]any, cred *Credential) (any, error)
+			Stream(ctx context.Context, model string, payload map[string]any, cred *Credential) (StreamIter, error)
 		}
 		type completableProvider interface {
 			Complete(ctx context.Context, model string, payload map[string]any, cred *Credential) (map[string]any, error)
 		}
 
 		if stream {
-			if sp, ok := provider.(streamableProvider); ok {
-				iter, err := sp.Stream(r.Context(), target.Model, payload, cred)
-				if err != nil {
-					lastErr = err
-					continue
-				}
-
-				w.Header().Set("Content-Type", "text/event-stream")
-				w.Header().Set("Cache-Control", "no-cache")
-				w.Header().Set("Connection", "keep-alive")
-
-				type nextCloser interface {
-					Next() ([]byte, error)
-					Close() error
-				}
-				if nc, ok := iter.(nextCloser); ok {
-					defer nc.Close()
-					flusher, _ := w.(http.Flusher)
-					for {
-						chunk, err := nc.Next()
-						if len(chunk) > 0 {
-							_, _ = w.Write(chunk)
-							if flusher != nil {
-								flusher.Flush()
-							}
-						}
-						if err != nil {
-							break
-						}
-					}
-				}
-
-				e.recordTelemetry(r.Context(), principal, target, time.Since(start), true, 200, nil)
-				return
+			sp, ok := provider.(streamableProvider)
+			if !ok {
+				lastErr = fmt.Errorf("provider %q does not support streaming", target.Provider)
+				continue
 			}
+			iter, err := sp.Stream(r.Context(), target.Model, payload, cred)
+			if err != nil {
+				lastErr = err
+				if requestCanceled(r.Context(), err) || !failoverEligible(err) {
+					break
+				}
+				continue
+			}
+			streamErr, wrote := writeSSEStream(w, iter)
+			if streamErr != nil && !wrote {
+				lastErr = streamErr
+				if requestCanceled(r.Context(), streamErr) || !failoverEligible(streamErr) {
+					break
+				}
+				continue
+			}
+			status := http.StatusOK
+			if streamErr != nil {
+				status = http.StatusBadGateway
+			}
+			e.recordTelemetry(r.Context(), principal, target, time.Since(start), true, status, streamErr)
+			return
 		}
 
 		if cp, ok := provider.(completableProvider); ok {
 			resp, err := cp.Complete(r.Context(), target.Model, payload, cred)
 			if err != nil {
 				lastErr = err
+				if requestCanceled(r.Context(), err) || !failoverEligible(err) {
+					break
+				}
 				continue
 			}
 
@@ -258,7 +263,7 @@ func (e *Engine) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			"type":    "upstream_error",
 		},
 	})
-	e.recordTelemetry(r.Context(), principal, Target{Provider: requestedModel}, time.Since(start), stream, 502, lastErr)
+	e.recordTelemetry(r.Context(), principal, lastTarget, time.Since(start), stream, 502, lastErr)
 }
 
 func (e *Engine) handleMessages(w http.ResponseWriter, r *http.Request) {
@@ -324,7 +329,7 @@ func (e *Engine) handleMessages(w http.ResponseWriter, r *http.Request) {
 
 	if stream {
 		type streamableProvider interface {
-			Stream(ctx context.Context, model string, payload map[string]any, cred *Credential) (any, error)
+			Stream(ctx context.Context, model string, payload map[string]any, cred *Credential) (StreamIter, error)
 		}
 		if sp, ok := provider.(streamableProvider); ok {
 			iter, err := sp.Stream(r.Context(), target.Model, openaiPayload, cred)
@@ -333,31 +338,71 @@ func (e *Engine) handleMessages(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("Connection", "keep-alive")
-
-			type nextCloser interface {
-				Next() ([]byte, error)
-				Close() error
-			}
-			if nc, ok := iter.(nextCloser); ok {
-				defer nc.Close()
-				flusher, _ := w.(http.Flusher)
-				chunksIter := func() (string, bool) {
-					b, err := nc.Next()
-					if err != nil || len(b) == 0 {
+			defer iter.Close()
+			flusher, _ := w.(http.Flusher)
+			var streamErr error
+			var pendingErr error
+			terminal := false
+			wrote := false
+			chunksIter := func() (string, bool) {
+				for {
+					if pendingErr != nil {
+						streamErr = pendingErr
 						return "", false
 					}
-					return string(b), true
+					b, err := iter.Next()
+					if len(b) == 0 && err != nil {
+						if err == io.EOF {
+							streamErr = errors.New("provider stream ended before data: [DONE]")
+						} else {
+							streamErr = err
+						}
+						return "", false
+					}
+					if len(b) == 0 {
+						continue
+					}
+					pendingErr = err
+					payload, done, ok := sseDataPayload(b)
+					if done {
+						pendingErr = nil
+						terminal = true
+						return "", false
+					}
+					if ok {
+						return payload, true
+					}
 				}
+			}
 
-				translate.OpenAIStreamToAnthropicSSE(chunksIter, target.Model, func(sseEvent string) {
-					_, _ = w.Write([]byte(sseEvent))
+			translate.OpenAIStreamToAnthropicSSE(chunksIter, target.Model, func(sseEvent string) {
+				if streamErr != nil {
+					return
+				}
+				if !wrote {
+					w.Header().Set("Content-Type", "text/event-stream")
+					w.Header().Set("Cache-Control", "no-cache")
+					w.Header().Set("Connection", "keep-alive")
+				}
+				wrote = true
+				_, _ = w.Write([]byte(sseEvent))
+				if flusher != nil {
+					flusher.Flush()
+				}
+			})
+			if streamErr != nil {
+				if !wrote {
+					http.Error(w, fmt.Sprintf(`{"type":"error","error":{"message":%q}}`, streamErr.Error()), http.StatusBadGateway)
+				} else if !requestCanceled(r.Context(), streamErr) {
+					_, _ = io.WriteString(w, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"upstream stream failed\"}}\n\n")
 					if flusher != nil {
 						flusher.Flush()
 					}
-				})
+				}
+				return
+			}
+			if !terminal {
+				http.Error(w, `{"type":"error","error":{"message":"provider stream ended without a terminal event"}}`, http.StatusBadGateway)
 			}
 			return
 		}
@@ -449,4 +494,84 @@ func (e *Engine) recordTelemetry(ctx context.Context, principal *Principal, targ
 		StatusCode:  status,
 		Error:       errStr,
 	})
+}
+
+func failoverEligible(err error) bool {
+	var classified ProviderErrorClassifier
+	return errors.As(err, &classified) && classified.ProviderErrorClassification().FailoverEligible
+}
+
+func requestCanceled(ctx context.Context, err error) bool {
+	return ctx.Err() != nil
+}
+
+func writeSSEStream(w http.ResponseWriter, iter StreamIter) (streamErr error, wrote bool) {
+	defer func() {
+		if err := iter.Close(); streamErr == nil && err != nil {
+			streamErr = err
+		}
+	}()
+	flusher, _ := w.(http.Flusher)
+	terminal := false
+	for {
+		chunk, err := iter.Next()
+		if len(chunk) > 0 {
+			if terminal {
+				return errors.New("provider stream emitted an SSE event after data: [DONE]"), wrote
+			}
+			if !wrote {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("Cache-Control", "no-cache")
+				w.Header().Set("Connection", "keep-alive")
+			}
+			wrote = true
+			_, _ = w.Write(chunk)
+			if flusher != nil {
+				flusher.Flush()
+			}
+			if isSSEDone(chunk) {
+				terminal = true
+			}
+		}
+		if err == io.EOF {
+			if !terminal {
+				return errors.New("provider stream ended before data: [DONE]"), wrote
+			}
+			return nil, wrote
+		}
+		if err != nil {
+			return err, wrote
+		}
+	}
+}
+
+func isSSEDone(frame []byte) bool {
+	payload, ok := sseData(frame)
+	return ok && payload == "[DONE]"
+}
+
+func sseDataPayload(frame []byte) (payload string, done bool, ok bool) {
+	payload, ok = sseData(frame)
+	if !ok {
+		return "", false, false
+	}
+	if payload == "[DONE]" {
+		return "", true, true
+	}
+	return payload, false, true
+}
+
+func sseData(frame []byte) (string, bool) {
+	var values []string
+	for _, line := range strings.Split(strings.ReplaceAll(string(frame), "\r\n", "\n"), "\n") {
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		value := strings.TrimPrefix(line, "data:")
+		if strings.HasPrefix(value, " ") {
+			value = value[1:]
+		}
+		values = append(values, value)
+	}
+	return strings.Join(values, "\n"), len(values) > 0
 }

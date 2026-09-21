@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 )
@@ -37,6 +38,43 @@ type Credential struct {
 	Headers            map[string]string `json:"headers,omitempty"`
 }
 
+// StreamIter yields complete SSE frames from an active provider stream.
+type StreamIter interface {
+	Next() ([]byte, error)
+	Close() error
+}
+
+// ProviderErrorClassification is the provider-independent routing metadata for
+// an operation failure. StatusCode is zero when no HTTP response was received.
+type ProviderErrorClassification struct {
+	StatusCode       int
+	Retryable        bool
+	FailoverEligible bool
+	CircuitFailure   bool
+}
+
+// ProviderErrorClassifier exposes routing metadata without requiring callers
+// to depend on a provider package's concrete error type.
+type ProviderErrorClassifier interface {
+	ProviderErrorClassification() ProviderErrorClassification
+}
+
+func (e *ProviderOperationError) ProviderErrorClassification() ProviderErrorClassification {
+	if e == nil {
+		return ProviderErrorClassification{}
+	}
+	if errors.Is(e, context.Canceled) || errors.Is(e, context.DeadlineExceeded) {
+		return ProviderErrorClassification{StatusCode: e.Failure.StatusCode}
+	}
+	health := ClassifyProviderFailure(e.Failure)
+	return ProviderErrorClassification{
+		StatusCode:       e.Failure.StatusCode,
+		Retryable:        health.Retryable,
+		FailoverEligible: health.Retryable,
+		CircuitFailure:   health.ErrorClass == ProviderErrorTransport || health.ErrorClass == ProviderErrorUpstream,
+	}
+}
+
 // UsageRecord holds metrics and token counts from a completed LLM call.
 type UsageRecord struct {
 	RequestID    string        `json:"request_id"`
@@ -54,13 +92,16 @@ type UsageRecord struct {
 
 // ModelInfo describes an available upstream model or alias.
 type ModelInfo struct {
-	ID           string             `json:"id"`
-	Object       string             `json:"object"`
-	Created      int64              `json:"created"`
-	OwnedBy      string             `json:"owned_by"`
-	Description  string             `json:"description,omitempty"`
-	Tags         []string           `json:"tags,omitempty"`
-	Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
+	ID            string             `json:"id"`
+	Object        string             `json:"object"`
+	Created       int64              `json:"created"`
+	OwnedBy       string             `json:"owned_by"`
+	Description   string             `json:"description,omitempty"`
+	Tags          []string           `json:"tags,omitempty"`
+	APIEligible   *bool              `json:"api_eligible,omitempty"`
+	APIVisibility string             `json:"api_visibility,omitempty"`
+	SupportedAPIs []string           `json:"supported_apis,omitempty"`
+	Capabilities  *ModelCapabilities `json:"capabilities,omitempty"`
 }
 
 // Authenticator authenticates an incoming HTTP request.

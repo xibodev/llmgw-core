@@ -56,12 +56,45 @@ func TestAnonymousHeadersIDFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.AnonymousHeaders(); err == nil || !strings.Contains(err.Error(), "session identity") {
+	if _, err := client.AnonymousHeaders(); err == nil || !strings.Contains(err.Error(), "invocation identity") {
 		t.Fatalf("error=%v", err)
 	}
 }
 
-func TestDiscoverIntersectsCatalogAndConservativelyAdmits(t *testing.T) {
+func TestInvocationIdentityLifetimesAndCallerPrecedence(t *testing.T) {
+	sequence := 0
+	newID := func(prefix string) (string, error) { sequence++; return fmt.Sprintf("%s_%d", prefix, sequence), nil }
+	headers := http.Header{}
+	headers.Set("x-opencode-project", "project caller")
+	headers.Set("x-opencode-session", "session caller")
+	headers.Set("x-opencode-client", "app caller")
+	headers.Set("User-Agent", "caller/1")
+	first, err := NewInvocationIdentity(headers, newID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewInvocationIdentity(headers, newID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Project != "project caller" || first.Session != "session caller" || first.Client != "app caller" || first.UserAgent != AnonymousUserAgent || first.Request != "msg_1" {
+		t.Fatalf("first=%+v", first)
+	}
+	if second.Session != first.Session || second.Request != "msg_2" || sequence != 2 {
+		t.Fatalf("second=%+v sequence=%d", second, sequence)
+	}
+	ctx := WithInvocationIdentity(context.Background(), first)
+	stable, err := EnsureInvocationIdentity(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := InvocationIdentityFromContext(stable)
+	if !ok || !reflect.DeepEqual(got, first) {
+		t.Fatalf("identity=%+v ok=%v", got, ok)
+	}
+}
+
+func TestDiscoverMatchesOpenCodePublicSnapshotSemantics(t *testing.T) {
 	observedAt := time.Date(2026, time.September, 21, 12, 0, 0, 0, time.UTC)
 	zenCatalog := `{"data":[
 		{"id":"chat-free","object":"model","created":1},
@@ -78,6 +111,8 @@ func TestDiscoverIntersectsCatalogAndConservativelyAdmits(t *testing.T) {
 		"deprecated-free":{"id":"deprecated-free","status":"deprecated","cost":{"input":0,"output":0}},
 		"paid":{"id":"paid","cost":{"input":0,"output":0.01}},
 		"missing-output":{"id":"missing-output","cost":{"input":0}},
+		"missing-input":{"id":"missing-input","cost":{"output":1}},
+		"missing-cost":{"id":"missing-cost"},
 		"string-zero":{"id":"string-zero","cost":{"input":"0","output":0}},
 		"unknown-cost":{"id":"unknown-cost","cost":{"input":0,"output":0,"future_price":0}},
 		"unknown-surface":{"id":"unknown-surface","provider":{"npm":"@ai-sdk/anthropic"},"cost":{"input":0,"output":0}},
@@ -113,11 +148,11 @@ func TestDiscoverIntersectsCatalogAndConservativelyAdmits(t *testing.T) {
 	for _, model := range evidence.Models {
 		ids = append(ids, model.ID)
 	}
-	if want := []string{"beta-free", "chat-free", "responses-free"}; !slices.Equal(ids, want) {
+	if want := []string{"beta-free", "chat-free", "metadata-only", "missing-cost", "missing-input", "missing-output", "paid", "responses-free", "unknown-cost"}; !slices.Equal(ids, want) {
 		t.Fatalf("models=%v, want %v", ids, want)
 	}
-	if zenHeaders.Get("Authorization") != "Bearer public" || zenHeaders.Get("x-opencode-session") == "" {
-		t.Fatalf("anonymous headers=%v", zenHeaders)
+	if zenHeaders != nil {
+		t.Fatalf("public snapshot unexpectedly required live Zen: %v", zenHeaders)
 	}
 
 	chat := evidence.Models[1]
@@ -132,9 +167,27 @@ func TestDiscoverIntersectsCatalogAndConservativelyAdmits(t *testing.T) {
 		capabilities.Freshness.ExpiresAt == nil || !capabilities.Freshness.ExpiresAt.Equal(observedAt.Add(time.Hour)) {
 		t.Fatalf("chat capabilities=%+v", capabilities)
 	}
-	responses := evidence.Models[2]
+	responses := evidence.Models[7]
 	if surface, ok := NativeSurface(responses); !ok || surface != core.ModelSurfaceResponses {
 		t.Fatalf("responses surface=%q ok=%v", surface, ok)
+	}
+}
+
+func TestDiscoverVerifiedRequiresLiveExactZeroCost(t *testing.T) {
+	metadataRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/zen/models" {
+			_, _ = fmt.Fprint(w, `{"data":[{"id":"free"},{"id":"beta-free"},{"id":"unstated"},{"id":"input-only"}]}`)
+			return
+		}
+		metadataRequests++
+		_, _ = fmt.Fprint(w, `{"opencode":{"npm":"@ai-sdk/openai-compatible","models":{"free":{"id":"free","status":"active","cost":{"input":0,"output":0}},"beta-free":{"id":"beta-free","status":"beta","cost":{"input":0,"output":0}},"unstated":{"id":"unstated","cost":{"input":0,"output":0}},"input-only":{"id":"input-only","status":"active","cost":{"input":0,"output":1}},"snapshot-only":{"id":"snapshot-only","status":"active","cost":{"input":0,"output":0}}}}}`)
+	}))
+	defer server.Close()
+	client := testClient(t, server.URL+"/zen", server.URL+"/metadata", time.Now())
+	evidence, err := client.DiscoverVerified(context.Background())
+	if err != nil || len(evidence.Models) != 2 || evidence.Models[0].ID != "beta-free" || evidence.Models[1].ID != "free" || metadataRequests != 1 {
+		t.Fatalf("evidence=%+v err=%v", evidence, err)
 	}
 }
 
@@ -163,7 +216,7 @@ func TestDiscoverFailureAndEmptyEvidence(t *testing.T) {
 			t.Fatalf("evidence=%+v err=%v", evidence, err)
 		}
 	})
-	t.Run("invalid Zen shape", func(t *testing.T) {
+	t.Run("public snapshot does not require Zen shape", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasSuffix(r.URL.Path, "/models") {
 				_, _ = fmt.Fprint(w, `{}`)
@@ -174,7 +227,7 @@ func TestDiscoverFailureAndEmptyEvidence(t *testing.T) {
 		defer server.Close()
 		client := testClient(t, server.URL, server.URL+"/metadata", time.Now())
 		evidence, err := client.Discover(context.Background())
-		if err == nil || evidence.Status != core.CatalogFailed {
+		if err != nil || evidence.Status != core.CatalogEmpty {
 			t.Fatalf("evidence=%+v err=%v", evidence, err)
 		}
 	})
@@ -194,11 +247,17 @@ func TestNativeSurfaceRejectsAmbiguousOrMissingCapabilities(t *testing.T) {
 
 func TestCompleteNativeUsesSurfaceAndClassifiableErrors(t *testing.T) {
 	var paths []string
+	var identities []InvocationIdentity
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
 		if r.Header.Get("Authorization") != "Bearer public" {
 			t.Fatalf("headers=%v", r.Header)
 		}
+		identities = append(identities, InvocationIdentity{
+			Project: r.Header.Get("x-opencode-project"), Session: r.Header.Get("x-opencode-session"),
+			Request: r.Header.Get("x-opencode-request"), Client: r.Header.Get("x-opencode-client"),
+			UserAgent: r.Header.Get("User-Agent"),
+		})
 		var payload map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
@@ -216,17 +275,22 @@ func TestCompleteNativeUsesSurfaceAndClassifiableErrors(t *testing.T) {
 	defer server.Close()
 	client := testClient(t, server.URL+"/zen/v1", server.URL+"/metadata", time.Now())
 	payload := map[string]any{"input": "hello"}
-	result, err := client.CompleteNative(context.Background(), "free", core.ModelSurfaceResponses, payload)
+	identity := InvocationIdentity{Project: "project", Session: "session", Request: "request", Client: "desktop", UserAgent: AnonymousUserAgent}
+	ctx := WithInvocationIdentity(context.Background(), identity)
+	result, err := client.CompleteNative(ctx, "free", core.ModelSurfaceResponses, payload)
 	if err != nil || result["id"] != "response" || payload["model"] != nil {
 		t.Fatalf("result=%v payload=%v err=%v", result, payload, err)
 	}
-	_, err = client.CompleteNative(context.Background(), "free", core.ModelSurfaceChatCompletions, payload)
+	_, err = client.CompleteNative(ctx, "free", core.ModelSurfaceChatCompletions, payload)
 	var operationError *core.ProviderOperationError
 	if !errors.As(err, &operationError) || operationError.Failure.StatusCode != http.StatusTooManyRequests || operationError.Failure.RetryAfter != "7" || strings.Contains(err.Error(), "do not expose") {
 		t.Fatalf("error=%#v", err)
 	}
 	if !slices.Equal(paths, []string{"/zen/v1/responses", "/zen/v1/chat/completions"}) {
 		t.Fatalf("paths=%v", paths)
+	}
+	if len(identities) != 2 || !reflect.DeepEqual(identities[0], identity) || !reflect.DeepEqual(identities[1], identity) {
+		t.Fatalf("identities=%+v", identities)
 	}
 }
 
@@ -273,7 +337,7 @@ func TestConnectReturnsNativeProbeEvidenceAndPublication(t *testing.T) {
 		case "/zen/models":
 			_, _ = fmt.Fprint(w, `{"data":[{"id":"responses-free"}]}`)
 		case "/metadata":
-			_, _ = fmt.Fprint(w, `{"opencode":{"npm":"@ai-sdk/openai-compatible","models":{"responses-free":{"id":"responses-free","provider":{"npm":"@ai-sdk/openai"},"cost":{"input":0,"output":0},"tool_call":true}}}}`)
+			_, _ = fmt.Fprint(w, `{"opencode":{"npm":"@ai-sdk/openai-compatible","models":{"responses-free":{"id":"responses-free","status":"active","provider":{"npm":"@ai-sdk/openai"},"cost":{"input":0,"output":0},"tool_call":true}}}}`)
 		case "/zen/responses":
 			probePath = r.URL.Path
 			if r.Header.Get("Accept") != "text/event-stream" {
@@ -283,7 +347,7 @@ func TestConnectReturnsNativeProbeEvidenceAndPublication(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Fatal(err)
 			}
-			if payload["input"] != "Reply with: ok" || payload["messages"] != nil || payload["max_output_tokens"] != float64(16) || len(payload["tools"].([]any)) != 2 {
+			if payload["input"] != "Reply with: ok" || payload["messages"] != nil || payload["max_output_tokens"] != float64(16) || payload["tools"] != nil {
 				t.Fatalf("probe payload=%+v", payload)
 			}
 			_, _ = fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")
@@ -334,7 +398,7 @@ func TestConnectRejectsWrongConnectionAndClassifiesProbeFailure(t *testing.T) {
 		case "/zen/models":
 			_, _ = fmt.Fprint(w, `{"data":[{"id":"chat-free"}]}`)
 		case "/metadata":
-			_, _ = fmt.Fprint(w, `{"opencode":{"npm":"@ai-sdk/openai-compatible","models":{"chat-free":{"id":"chat-free","cost":{"input":0,"output":0}}}}}`)
+			_, _ = fmt.Fprint(w, `{"opencode":{"npm":"@ai-sdk/openai-compatible","models":{"chat-free":{"id":"chat-free","status":"active","cost":{"input":0,"output":0}}}}}`)
 		default:
 			w.Header().Set("Retry-After", "3")
 			http.Error(w, "limited", http.StatusTooManyRequests)
@@ -358,7 +422,7 @@ func TestConnectDoesNotVerifyMalformedSSE(t *testing.T) {
 		case "/zen/models":
 			_, _ = fmt.Fprint(w, `{"data":[{"id":"chat-free"}]}`)
 		case "/metadata":
-			_, _ = fmt.Fprint(w, `{"opencode":{"npm":"@ai-sdk/openai-compatible","models":{"chat-free":{"id":"chat-free","cost":{"input":0,"output":0}}}}}`)
+			_, _ = fmt.Fprint(w, `{"opencode":{"npm":"@ai-sdk/openai-compatible","models":{"chat-free":{"id":"chat-free","status":"active","cost":{"input":0,"output":0}}}}}`)
 		default:
 			_, _ = fmt.Fprint(w, "data: {\"unexpected\":true}\n\ndata: [DONE]\n\n")
 		}
@@ -447,7 +511,7 @@ func TestConnectCancellationDuringProbeIsNotProviderFailureEvidence(t *testing.T
 		case "/zen/models":
 			_, _ = fmt.Fprint(w, `{"data":[{"id":"chat-free"}]}`)
 		case "/metadata":
-			_, _ = fmt.Fprint(w, `{"opencode":{"npm":"@ai-sdk/openai-compatible","models":{"chat-free":{"id":"chat-free","cost":{"input":0,"output":0}}}}}`)
+			_, _ = fmt.Fprint(w, `{"opencode":{"npm":"@ai-sdk/openai-compatible","models":{"chat-free":{"id":"chat-free","status":"active","cost":{"input":0,"output":0}}}}}`)
 		default:
 			close(probeStarted)
 			select {

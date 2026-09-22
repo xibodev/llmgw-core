@@ -7,19 +7,23 @@ anonymous admission and provider behavior.
 
 - `New(Config) (*Client, error)` accepts injectable HTTP transport, endpoints,
   clock, ID source, response bound, capability TTL, and user agent.
-- `(*Client).Discover(context.Context)` fetches the live Zen catalog and
-  `models.dev`, returning their strictly admitted intersection as
-  `core.CatalogEvidence` with typed `core.ModelCapabilities`.
+- `(*Client).Discover(context.Context)` exposes the OpenCode-compatible
+  `models.dev` snapshot: zero input cost, normal status filtering, and the
+  model/provider npm surface as typed `core.ModelCapabilities`.
+- `(*Client).DiscoverVerified(context.Context)` optionally intersects that
+  snapshot with the live Zen catalog and enforces strict all-zero pricing.
 - `(*Client).Connect(context.Context, core.ProviderConnectRequest)` implements
   `core.ProviderConnector`, performs one native-surface inference probe, and
   returns standard catalog, probe, health, and exact-target evidence.
 - `(*Client).CompleteNative(...)` sends an already surface-correct Chat or
-  Responses payload with the required anonymous headers and admission tools.
+  Responses payload with the required anonymous headers.
 - `NativeSurface(core.ModelInfo)` reads the catalog-derived Chat versus
   Responses surface without model-name heuristics.
+- `InvocationIdentity`, `WithInvocationIdentity`, and
+  `ApplyInvocationHeaders` keep project/session/request/client identity stable
+  across transport retries without coupling it to authentication.
 - `ClassifyChat`, `ClassifyResponses`, `AdmitChat`, and `AdmitResponses` expose
-  request classification and minimal `bash`/`read` admission independently of
-  transport.
+  request classification while preserving exact caller tools and tool choice.
 
 The package performs no persistence, scheduling, auditing, or wire translation.
 Callers own catalog refresh policy and any evidence storage.
@@ -28,9 +32,9 @@ Callers own catalog refresh policy and any evidence storage.
 
 1. Construct one `zen.Client` from the provider's configured base URL. Leave
    `MetadataURL` empty for the public `models.dev` endpoint or inject it in tests.
-2. Replace gateway-local anonymous header generation with
-   `client.AnonymousHeaders`, or route requests through `CompleteNative`.
-3. Replace the gateway's live-catalog filtering with `client.Discover`. Persist
+2. Create one invocation identity at the API boundary, carry it in context, and
+   apply it after each auth preparation.
+3. Replace the gateway's public-catalog filtering with `client.Discover`. Persist
    the returned rows only in the gateway's existing catalog store, retaining
    the core freshness fields.
 4. Route each admitted row using `NativeSurface`; do not retain Muse/model-name

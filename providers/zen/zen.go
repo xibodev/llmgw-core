@@ -66,6 +66,72 @@ type Client struct {
 	userAgent       string
 }
 
+type invocationIdentityKey struct{}
+
+// InvocationIdentity is the logical OpenCode invocation, independent of any
+// authentication attempt. Keeping it in context makes all retries reuse it.
+type InvocationIdentity struct {
+	Project, Session, Request, Client, UserAgent string
+}
+
+func NewInvocationIdentity(headers http.Header, newID func(string) (string, error)) (InvocationIdentity, error) {
+	if newID == nil {
+		newID = randomID
+	}
+	identity := InvocationIdentity{
+		Project:   headers.Get("x-opencode-project"),
+		Session:   headers.Get("x-opencode-session"),
+		Request:   headers.Get("x-opencode-request"),
+		Client:    headers.Get("x-opencode-client"),
+		UserAgent: AnonymousUserAgent,
+	}
+	if identity.Project == "" {
+		identity.Project = "global"
+	}
+	if identity.Client == "" {
+		identity.Client = "cli"
+	}
+	var err error
+	if identity.Session == "" {
+		identity.Session, err = newID("ses")
+	}
+	if err == nil && identity.Request == "" {
+		identity.Request, err = newID("msg")
+	}
+	if err != nil {
+		return InvocationIdentity{}, fmt.Errorf("create Zen invocation identity: %w", err)
+	}
+	return identity, nil
+}
+
+func WithInvocationIdentity(ctx context.Context, identity InvocationIdentity) context.Context {
+	return context.WithValue(ctx, invocationIdentityKey{}, identity)
+}
+
+func InvocationIdentityFromContext(ctx context.Context) (InvocationIdentity, bool) {
+	identity, ok := ctx.Value(invocationIdentityKey{}).(InvocationIdentity)
+	return identity, ok
+}
+
+func EnsureInvocationIdentity(ctx context.Context, headers http.Header) (context.Context, error) {
+	if _, ok := InvocationIdentityFromContext(ctx); ok {
+		return ctx, nil
+	}
+	identity, err := NewInvocationIdentity(headers, nil)
+	if err != nil {
+		return ctx, err
+	}
+	return WithInvocationIdentity(ctx, identity), nil
+}
+
+func ApplyInvocationHeaders(header http.Header, identity InvocationIdentity) {
+	header.Set("x-opencode-project", identity.Project)
+	header.Set("x-opencode-session", identity.Session)
+	header.Set("x-opencode-request", identity.Request)
+	header.Set("x-opencode-client", identity.Client)
+	header.Set("User-Agent", identity.UserAgent)
+}
+
 func New(config Config) (*Client, error) {
 	providerID := strings.TrimSpace(config.ProviderID)
 	if providerID == "" {
@@ -130,26 +196,30 @@ func randomID(prefix string) (string, error) {
 	return prefix + "_" + hex.EncodeToString(raw[:]), nil
 }
 
-// AnonymousHeaders returns the headers required by Zen's public OpenCode path.
-// Session and request identities are new for every call.
+// AnonymousHeaders returns headers for one standalone logical invocation.
 func (c *Client) AnonymousHeaders() (http.Header, error) {
-	sessionID, err := c.newID("ses")
+	identity, err := NewInvocationIdentity(nil, c.newID)
 	if err != nil {
-		return nil, fmt.Errorf("create Zen session identity: %w", err)
+		return nil, err
 	}
-	requestID, err := c.newID("msg")
-	if err != nil {
-		return nil, fmt.Errorf("create Zen request identity: %w", err)
-	}
+	identity.Client = "cli"
+	identity.UserAgent = c.userAgent
+	return c.AnonymousHeadersFor(identity), nil
+}
+
+func (c *Client) AnonymousHeadersFor(identity InvocationIdentity) http.Header {
 	header := http.Header{}
 	header.Set("Authorization", "Bearer public")
 	header.Set("Content-Type", "application/json")
-	header.Set("User-Agent", c.userAgent)
-	header.Set("x-opencode-project", "global")
-	header.Set("x-opencode-client", "cli")
-	header.Set("x-opencode-session", sessionID)
-	header.Set("x-opencode-request", requestID)
-	return header, nil
+	ApplyInvocationHeaders(header, identity)
+	return header
+}
+
+func (c *Client) anonymousHeadersForContext(ctx context.Context) (http.Header, error) {
+	if identity, ok := InvocationIdentityFromContext(ctx); ok {
+		return c.AnonymousHeadersFor(identity), nil
+	}
+	return c.AnonymousHeaders()
 }
 
 type metadataProvider struct {
@@ -186,77 +256,51 @@ type catalogEnvelope struct {
 	} `json:"data"`
 }
 
-// Discover intersects the live Zen catalog with models.dev. A model is admitted
-// only when both sources name it, models.dev marks it active or beta, every
-// recognized price tier is exactly zero, and its native wire surface is known.
+// Discover returns the OpenCode-compatible public snapshot. OpenCode exposes
+// snapshot models with zero input cost, then applies its ordinary status rules.
 func (c *Client) Discover(ctx context.Context) (core.CatalogEvidence, error) {
+	evidence, _, err := c.discoverSnapshot(ctx)
+	return evidence, err
+}
+
+func (c *Client) discoverSnapshot(ctx context.Context) (core.CatalogEvidence, metadataProvider, error) {
 	observedAt := c.now().UTC()
-	zenRaw, err := c.get(ctx, c.baseURL+"/models", true)
-	if err != nil {
-		status := core.CatalogFailed
-		if isCallerCancellation(ctx, err) {
-			status = core.CatalogNotProbed
-		}
-		return core.CatalogEvidence{Status: status, ObservedAt: observedAt}, err
-	}
 	metadataRaw, err := c.get(ctx, c.metadataURL, false)
 	if err != nil {
 		status := core.CatalogFailed
 		if isCallerCancellation(ctx, err) {
 			status = core.CatalogNotProbed
 		}
-		return core.CatalogEvidence{Status: status, ObservedAt: observedAt}, err
+		return core.CatalogEvidence{Status: status, ObservedAt: observedAt}, metadataProvider{}, err
 	}
 
-	var catalog catalogEnvelope
-	if err := json.Unmarshal(zenRaw, &catalog); err != nil {
-		return core.CatalogEvidence{Status: core.CatalogFailed, ObservedAt: observedAt}, errors.New("decode Zen catalog")
-	}
-	if catalog.Data == nil {
-		return core.CatalogEvidence{Status: core.CatalogFailed, ObservedAt: observedAt}, errors.New("Zen catalog has no data list")
-	}
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(metadataRaw, &root); err != nil {
-		return core.CatalogEvidence{Status: core.CatalogFailed, ObservedAt: observedAt}, errors.New("decode models.dev catalog")
+		return core.CatalogEvidence{Status: core.CatalogFailed, ObservedAt: observedAt}, metadataProvider{}, errors.New("decode models.dev catalog")
 	}
 	providerRaw, ok := root["opencode"]
 	if !ok {
-		return core.CatalogEvidence{Status: core.CatalogFailed, ObservedAt: observedAt}, errors.New("models.dev catalog has no opencode provider")
+		return core.CatalogEvidence{Status: core.CatalogFailed, ObservedAt: observedAt}, metadataProvider{}, errors.New("models.dev catalog has no opencode provider")
 	}
 	var metadata metadataProvider
 	if err := json.Unmarshal(providerRaw, &metadata); err != nil || metadata.Models == nil {
-		return core.CatalogEvidence{Status: core.CatalogFailed, ObservedAt: observedAt}, errors.New("decode models.dev opencode provider")
+		return core.CatalogEvidence{Status: core.CatalogFailed, ObservedAt: observedAt}, metadataProvider{}, errors.New("decode models.dev opencode provider")
 	}
 
-	live := make(map[string]struct{}, len(catalog.Data))
-	rows := make(map[string]catalogEnvelopeRow, len(catalog.Data))
-	for _, row := range catalog.Data {
-		id := strings.TrimSpace(row.ID)
-		if id == "" {
-			continue
-		}
-		live[id] = struct{}{}
-		rows[id] = catalogEnvelopeRow{object: row.Object, created: row.Created}
-	}
-	models := make([]core.ModelInfo, 0, len(live))
+	models := make([]core.ModelInfo, 0, len(metadata.Models))
 	for key, model := range metadata.Models {
 		if model.ID != key || model.ID == "" {
 			continue
 		}
-		if _, ok := live[key]; !ok || !admittedStatus(model.Status) || !exactZeroCost(model.Cost) {
+		if !admittedStatus(model.Status) || !inputCostZero(model.Cost) {
 			continue
 		}
 		surface, ok := nativeSurface(metadata.NPM, model)
 		if !ok {
 			continue
 		}
-		row := rows[key]
-		object := row.object
-		if object == "" {
-			object = "model"
-		}
 		models = append(models, core.ModelInfo{
-			ID: key, Object: object, Created: row.created, OwnedBy: c.providerID,
+			ID: key, Object: "model", OwnedBy: c.providerID,
 			Description: model.Name, Capabilities: capabilities(model, surface, observedAt, c.capabilityTTL),
 		})
 	}
@@ -265,7 +309,49 @@ func (c *Client) Discover(ctx context.Context) (core.CatalogEvidence, error) {
 	if len(models) == 0 {
 		status = core.CatalogEmpty
 	}
-	return core.CatalogEvidence{Status: status, Models: models, ObservedAt: observedAt}, nil
+	return core.CatalogEvidence{Status: status, Models: models, ObservedAt: observedAt}, metadata, nil
+}
+
+// DiscoverVerified is the optional strict policy: a snapshot model must also
+// appear in the live Zen catalog and have every described monetary cost at zero.
+func (c *Client) DiscoverVerified(ctx context.Context) (core.CatalogEvidence, error) {
+	public, metadata, err := c.discoverSnapshot(ctx)
+	if err != nil {
+		return public, err
+	}
+	raw, err := c.get(ctx, c.baseURL+"/models", true)
+	if err != nil {
+		return core.CatalogEvidence{Status: core.CatalogFailed, ObservedAt: public.ObservedAt}, err
+	}
+	var catalog catalogEnvelope
+	if json.Unmarshal(raw, &catalog) != nil || catalog.Data == nil {
+		return core.CatalogEvidence{Status: core.CatalogFailed, ObservedAt: public.ObservedAt}, errors.New("decode Zen catalog")
+	}
+	live := make(map[string]bool, len(catalog.Data))
+	for _, row := range catalog.Data {
+		live[strings.TrimSpace(row.ID)] = true
+	}
+	verified := public.Models[:0]
+	for _, model := range public.Models {
+		metadataModel := metadata.Models[model.ID]
+		if live[model.ID] && verifiedStatus(metadataModel.Status) && exactZeroCost(metadataModel.Cost) {
+			verified = append(verified, model)
+		}
+	}
+	public.Models = verified
+	if len(verified) == 0 {
+		public.Status = core.CatalogEmpty
+	}
+	return public, nil
+}
+
+func verifiedStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "active", "beta":
+		return true
+	default:
+		return false
+	}
 }
 
 type catalogEnvelopeRow struct {
@@ -379,6 +465,11 @@ func rawZero(raw json.RawMessage) bool {
 	}
 	rational, ok := new(big.Rat).SetString(number.String())
 	return ok && rational.Sign() == 0
+}
+
+func inputCostZero(cost map[string]json.RawMessage) bool {
+	raw, ok := cost["input"]
+	return !ok || rawZero(raw)
 }
 
 func nativeSurface(providerNPM string, model metadataModel) (core.ModelSurface, bool) {
@@ -500,7 +591,7 @@ func (c *Client) CompleteNative(ctx context.Context, model string, surface core.
 	if err != nil {
 		return nil, errors.New("create Zen request")
 	}
-	headers, err := c.AnonymousHeaders()
+	headers, err := c.anonymousHeadersForContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -568,7 +659,7 @@ func (c *Client) Connect(ctx context.Context, request core.ProviderConnectReques
 		return result, err
 	}
 
-	catalog, err := c.Discover(ctx)
+	catalog, err := c.DiscoverVerified(ctx)
 	result.Catalog = catalog
 	if err != nil {
 		if isCallerCancellation(ctx, err) {
@@ -635,7 +726,7 @@ func (c *Client) probe(ctx context.Context, model string, surface core.ModelSurf
 	if err != nil {
 		return errors.New("create Zen probe")
 	}
-	headers, err := c.AnonymousHeaders()
+	headers, err := c.anonymousHeadersForContext(ctx)
 	if err != nil {
 		return err
 	}

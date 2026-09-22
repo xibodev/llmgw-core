@@ -189,7 +189,8 @@ func TestProviderOrchestratorClassifiesProbeFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Probes) != 1 || result.Probes[0].Status != core.CompletionFailed || len(result.Targets) != 0 {
+	if len(result.Probes) != 1 || result.Probes[0].Status != core.CompletionFailed ||
+		result.Probes[0].FailureCode == "" || len(result.Targets) != 0 {
 		t.Fatalf("probe result=%+v targets=%+v", result.Probes, result.Targets)
 	}
 	if result.Health.ErrorClass != core.ProviderErrorRateLimited || !result.Health.Retryable || result.Health.RetryAfter != 9*time.Second {

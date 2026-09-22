@@ -24,13 +24,13 @@ func TestRequestClassificationRequiresExplicitTitleInstruction(t *testing.T) {
 	}
 }
 
-func TestAdmitChatPreservesMessagesAndAddsOnlyMissingTools(t *testing.T) {
-	messages := []map[string]any{{"role": "system", "content": "You are a coding assistant."}, {"role": "user", "content": "hello"}}
+func TestAdmitChatAddsCompatibilityToMultiTurnAndPreservesCallerChoice(t *testing.T) {
+	messages := []map[string]any{{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}, {"role": "user", "content": "continue"}}
 	custom := map[string]any{"type": "function", "function": map[string]any{"name": "search"}}
-	payload := map[string]any{"tools": []any{custom}, "temperature": 0.2}
+	payload := map[string]any{"tools": []any{custom}, "tool_choice": map[string]any{"type": "function", "function": map[string]any{"name": "search"}}, "temperature": 0.2}
 	beforeMessages := copyMessages(messages)
 	admitted := AdmitChat(messages, payload)
-	if !reflect.DeepEqual(messages, beforeMessages) || admitted["temperature"] != 0.2 || admitted["tool_choice"] != nil {
+	if !reflect.DeepEqual(messages, beforeMessages) || admitted["temperature"] != payload["temperature"] || !reflect.DeepEqual(admitted["tool_choice"], payload["tool_choice"]) {
 		t.Fatalf("messages=%v admitted=%v", messages, admitted)
 	}
 	tools, _ := admitted["tools"].([]any)
@@ -40,36 +40,28 @@ func TestAdmitChatPreservesMessagesAndAddsOnlyMissingTools(t *testing.T) {
 	if original, _ := payload["tools"].([]any); len(original) != 1 {
 		t.Fatalf("caller payload mutated: %v", payload)
 	}
-
-	existing := map[string]any{"tools": []any{chatTool("bash"), responsesTool("read")}}
-	admitted = AdmitChat(messages, existing)
-	if got := toolNames(admitted["tools"].([]any)); !reflect.DeepEqual(got, []string{"bash", "read"}) {
-		t.Fatalf("duplicate tools=%v", got)
-	}
 }
 
-func TestAdmissionPreservesMapToolSlicesAndAddsOnlyMissingTools(t *testing.T) {
+func TestAdmissionPreservesMapToolSlices(t *testing.T) {
 	chatSearch := map[string]any{"type": "function", "function": map[string]any{"name": "search"}}
-	chatBash := chatTool("bash")
-	chatPayload := map[string]any{"tools": []map[string]any{chatSearch, chatBash}}
+	chatPayload := map[string]any{"tools": []map[string]any{chatSearch}}
 	chat := AdmitChat([]map[string]any{{"role": "user", "content": "hello"}}, chatPayload)
 	chatTools, ok := chat["tools"].([]map[string]any)
 	if !ok || !reflect.DeepEqual(toolMapNames(chatTools), []string{"search", "bash", "read"}) {
 		t.Fatalf("chat tools=%T %v", chat["tools"], chat["tools"])
 	}
-	if len(chatPayload["tools"].([]map[string]any)) != 2 {
+	if len(chatPayload["tools"].([]map[string]any)) != 1 {
 		t.Fatalf("chat caller payload mutated: %v", chatPayload)
 	}
 
 	responsesSearch := map[string]any{"type": "function", "name": "search"}
-	responsesRead := responsesTool("read")
-	responsesPayload := map[string]any{"input": "hello", "tools": []map[string]any{responsesSearch, responsesRead}}
+	responsesPayload := map[string]any{"input": "hello", "tools": []map[string]any{responsesSearch}, "tool_choice": "required"}
 	responses := AdmitResponses(responsesPayload)
 	responsesTools, ok := responses["tools"].([]map[string]any)
-	if !ok || !reflect.DeepEqual(toolMapNames(responsesTools), []string{"search", "read", "bash"}) {
+	if !ok || !reflect.DeepEqual(toolMapNames(responsesTools), []string{"search", "bash", "read"}) || responses["tool_choice"] != "required" {
 		t.Fatalf("responses tools=%T %v", responses["tools"], responses["tools"])
 	}
-	if len(responsesPayload["tools"].([]map[string]any)) != 2 {
+	if len(responsesPayload["tools"].([]map[string]any)) != 1 {
 		t.Fatalf("responses caller payload mutated: %v", responsesPayload)
 	}
 }
@@ -77,11 +69,23 @@ func TestAdmissionPreservesMapToolSlicesAndAddsOnlyMissingTools(t *testing.T) {
 func TestAdmitOrdinaryNoToolRequestsWithoutPromptRewrite(t *testing.T) {
 	messages := []map[string]any{{"role": "user", "content": "Explain this failure"}}
 	admitted := AdmitChat(messages, map[string]any{"max_tokens": 32})
-	if messages[0]["content"] != "Explain this failure" || admitted["tool_choice"] != "auto" || len(admitted["tools"].([]any)) != 2 {
+	if messages[0]["content"] != "Explain this failure" || admitted["tool_choice"] != nil || admitted["tools"] != nil {
 		t.Fatalf("messages=%v admitted=%v", messages, admitted)
 	}
 	responses := AdmitResponses(map[string]any{"instructions": "Be concise", "input": "Explain this failure"})
-	if responses["instructions"] != "Be concise" || responses["input"] != "Explain this failure" || responses["tool_choice"] != "auto" || len(responses["tools"].([]any)) != 2 {
+	if responses["instructions"] != "Be concise" || responses["input"] != "Explain this failure" || responses["tool_choice"] != nil || responses["tools"] != nil {
+		t.Fatalf("responses=%v", responses)
+	}
+}
+
+func TestAdmitMultiTurnDefaultsCompatibilityToolsAndAutoChoice(t *testing.T) {
+	messages := []map[string]any{{"role": "user", "content": "one"}, {"role": "assistant", "content": "two"}, {"role": "user", "content": "three"}}
+	chat := AdmitChat(messages, map[string]any{"max_tokens": 2048})
+	if got := toolNames(chat["tools"].([]any)); !reflect.DeepEqual(got, []string{"bash", "read"}) || chat["tool_choice"] != "auto" {
+		t.Fatalf("chat=%v", chat)
+	}
+	responses := AdmitResponses(map[string]any{"input": []any{map[string]any{"role": "user", "content": "one"}, map[string]any{"role": "assistant", "content": "two"}, map[string]any{"role": "user", "content": "three"}}})
+	if got := toolNames(responses["tools"].([]any)); !reflect.DeepEqual(got, []string{"bash", "read"}) || responses["tool_choice"] != "auto" {
 		t.Fatalf("responses=%v", responses)
 	}
 }
@@ -89,11 +93,13 @@ func TestAdmitOrdinaryNoToolRequestsWithoutPromptRewrite(t *testing.T) {
 func TestExplicitTitleRequestsRemainToolFreeAndUnchanged(t *testing.T) {
 	chatPayload := map[string]any{"max_tokens": 16}
 	titleMessages := []map[string]any{{"role": "system", "content": "You are a title generator. Output one title."}, {"role": "user", "content": "hello"}}
-	if got := AdmitChat(titleMessages, chatPayload); !reflect.DeepEqual(got, chatPayload) || got["tools"] != nil {
+	chatPayload["tools"] = []any{map[string]any{"type": "function", "function": map[string]any{"name": "search"}}}
+	chatPayload["tool_choice"] = "auto"
+	if got := AdmitChat(titleMessages, chatPayload); got["tools"] != nil || got["tool_choice"] != nil {
 		t.Fatalf("chat title=%v", got)
 	}
-	responsesPayload := map[string]any{"instructions": "You are a title generator.", "input": "hello"}
-	if got := AdmitResponses(responsesPayload); !reflect.DeepEqual(got, responsesPayload) || got["tools"] != nil {
+	responsesPayload := map[string]any{"instructions": "You are a title generator.", "input": "hello", "tools": []any{map[string]any{"type": "function", "name": "search"}}, "tool_choice": "auto"}
+	if got := AdmitResponses(responsesPayload); got["tools"] != nil || got["tool_choice"] != nil {
 		t.Fatalf("responses title=%v", got)
 	}
 }

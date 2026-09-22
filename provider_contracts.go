@@ -104,10 +104,11 @@ const (
 
 // CompletionProbeEvidence records inference evidence for one exact target.
 type CompletionProbeEvidence struct {
-	Target     Target                `json:"target"`
-	Status     CompletionProbeStatus `json:"status"`
-	ObservedAt time.Time             `json:"observed_at,omitempty"`
-	Latency    time.Duration         `json:"latency,omitempty"`
+	Target      Target                `json:"target"`
+	Status      CompletionProbeStatus `json:"status"`
+	ObservedAt  time.Time             `json:"observed_at,omitempty"`
+	Latency     time.Duration         `json:"latency,omitempty"`
+	FailureCode string                `json:"failure_code,omitempty"`
 }
 
 func (e CompletionProbeEvidence) InferenceVerified() bool {
@@ -405,6 +406,7 @@ func (o *ProviderOrchestrator) Connect(ctx context.Context, request ProviderConn
 		if probeErr != nil {
 			probe.Status = CompletionFailed
 			result.Health = classifyProviderError(probeErr, finished)
+			probe.FailureCode = string(result.Health.ErrorClass)
 		}
 		result.Probes = append(result.Probes, probe)
 	}

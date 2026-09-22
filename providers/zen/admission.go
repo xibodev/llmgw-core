@@ -1,6 +1,9 @@
 package zen
 
-import "strings"
+import (
+	"reflect"
+	"strings"
+)
 
 type RequestKind string
 
@@ -36,101 +39,142 @@ func explicitTitleInstruction(value string) bool {
 	return value == "you are a title generator" || strings.HasPrefix(value, "you are a title generator.")
 }
 
-// AdmitChat adds Zen's minimum agent tools to an ordinary request without
-// changing any message or replacing caller tools. Explicit title requests are
-// returned unchanged.
+var compatibilityChatTools = []map[string]any{
+	{
+		"type": "function",
+		"function": map[string]any{
+			"name": "bash", "description": "Executes a given bash/powershell command.",
+			"parameters": map[string]any{"type": "object", "properties": map[string]any{
+				"command": map[string]any{"type": "string", "description": "The command to execute"},
+			}, "required": []any{"command"}},
+		},
+	},
+	{
+		"type": "function",
+		"function": map[string]any{
+			"name": "read", "description": "Read a file from the local filesystem.",
+			"parameters": map[string]any{"type": "object", "properties": map[string]any{
+				"filePath": map[string]any{"type": "string", "description": "The absolute path to the file to read"},
+			}, "required": []any{"filePath"}},
+		},
+	},
+}
+
+var compatibilityResponsesTools = []map[string]any{
+	{
+		"type": "function", "name": "bash", "description": "Executes a given bash/powershell command.",
+		"parameters": map[string]any{"type": "object", "properties": map[string]any{
+			"command": map[string]any{"type": "string", "description": "The command to execute"},
+		}, "required": []any{"command"}},
+	},
+	{
+		"type": "function", "name": "read", "description": "Read a file from the local filesystem.",
+		"parameters": map[string]any{"type": "object", "properties": map[string]any{
+			"filePath": map[string]any{"type": "string", "description": "The absolute path to the file to read"},
+		}, "required": []any{"filePath"}},
+	},
+}
+
+// AdmitChat restores the anonymous CLI's multi-turn compatibility contract
+// without changing first-turn assistant requests or explicit title requests.
 func AdmitChat(messages []map[string]any, payload map[string]any) map[string]any {
+	out := cloneMap(payload)
 	if ClassifyChat(messages) == RequestTitle {
-		return cloneMap(payload)
+		delete(out, "tools")
+		delete(out, "tool_choice")
+		return out
 	}
-	return admitTools(payload, chatTool)
+	if conversationTurns(messages) <= 1 && !hasTools(out["tools"]) {
+		return out
+	}
+	out["tools"] = ensureTools(out["tools"], compatibilityChatTools)
+	if out["tool_choice"] == nil {
+		out["tool_choice"] = "auto"
+	}
+	return out
 }
 
 // AdmitResponses is the Responses-wire equivalent of AdmitChat.
 func AdmitResponses(payload map[string]any) map[string]any {
+	out := cloneMap(payload)
 	if ClassifyResponses(payload) == RequestTitle {
-		return cloneMap(payload)
+		delete(out, "tools")
+		delete(out, "tool_choice")
+		return out
 	}
-	return admitTools(payload, responsesTool)
+	input, _ := payload["input"].([]any)
+	if len(input) <= 1 && !hasTools(out["tools"]) {
+		return out
+	}
+	out["tools"] = ensureTools(out["tools"], compatibilityResponsesTools)
+	if out["tool_choice"] == nil {
+		out["tool_choice"] = "auto"
+	}
+	return out
 }
 
-func admitTools(payload map[string]any, tool func(string) map[string]any) map[string]any {
-	output := cloneMap(payload)
-	rawTools := output["tools"]
-	callerTools := make([]map[string]any, 0)
-	callerToolCount := 0
-	switch tools := rawTools.(type) {
-	case []any:
-		callerToolCount = len(tools)
+func hasTools(value any) bool {
+	if value == nil {
+		return false
+	}
+	raw := reflect.ValueOf(value)
+	return raw.Kind() == reflect.Slice && raw.Len() > 0
+}
+
+func conversationTurns(messages []map[string]any) int {
+	turns := 0
+	for _, message := range messages {
+		role, _ := message["role"].(string)
+		if role != "system" && role != "developer" {
+			turns++
+		}
+	}
+	return turns
+}
+
+func ensureTools(value any, compatibility []map[string]any) any {
+	tools := toolSlice(value)
+	names := map[string]bool{}
+	for _, tool := range tools {
+		names[toolName(tool)] = true
+	}
+	for _, tool := range compatibility {
+		if !names[toolName(tool)] {
+			tools = append(tools, tool)
+		}
+	}
+	if _, ok := value.([]map[string]any); ok {
+		mapped := make([]map[string]any, 0, len(tools))
 		for _, raw := range tools {
-			if entry, ok := raw.(map[string]any); ok {
-				callerTools = append(callerTools, entry)
+			if tool, ok := raw.(map[string]any); ok {
+				mapped = append(mapped, tool)
 			}
 		}
-	case []map[string]any:
-		callerToolCount = len(tools)
-		callerTools = append(callerTools, tools...)
+		return mapped
 	}
-	hasBash, hasRead := false, false
-	for _, entry := range callerTools {
-		name, _ := entry["name"].(string)
-		if function, ok := entry["function"].(map[string]any); ok {
-			if nested, ok := function["name"].(string); ok {
-				name = nested
-			}
-		}
-		hasBash = hasBash || name == "bash"
-		hasRead = hasRead || name == "read"
-	}
-	if tools, ok := rawTools.([]map[string]any); ok {
-		admitted := append([]map[string]any(nil), tools...)
-		if !hasBash {
-			admitted = append(admitted, tool("bash"))
-		}
-		if !hasRead {
-			admitted = append(admitted, tool("read"))
-		}
-		output["tools"] = admitted
-	} else {
-		tools, _ := rawTools.([]any)
-		admitted := append([]any(nil), tools...)
-		if !hasBash {
-			admitted = append(admitted, tool("bash"))
-		}
-		if !hasRead {
-			admitted = append(admitted, tool("read"))
-		}
-		output["tools"] = admitted
-	}
-	if callerToolCount == 0 {
-		if _, supplied := output["tool_choice"]; !supplied {
-			output["tool_choice"] = "auto"
-		}
-	}
-	return output
+	return tools
 }
 
-func chatTool(name string) map[string]any {
-	return map[string]any{"type": "function", "function": functionTool(name)}
+func toolSlice(value any) []any {
+	if value == nil {
+		return nil
+	}
+	raw := reflect.ValueOf(value)
+	if raw.Kind() != reflect.Slice {
+		return nil
+	}
+	tools := make([]any, raw.Len())
+	for index := range tools {
+		tools[index] = raw.Index(index).Interface()
+	}
+	return tools
 }
 
-func responsesTool(name string) map[string]any {
-	tool := functionTool(name)
-	tool["type"] = "function"
-	return tool
-}
-
-func functionTool(name string) map[string]any {
-	property, description := "command", "Executes a given bash or PowerShell command."
-	if name == "read" {
-		property, description = "filePath", "Reads a file from the local filesystem."
+func toolName(value any) string {
+	tool, _ := value.(map[string]any)
+	name, _ := tool["name"].(string)
+	if function, ok := tool["function"].(map[string]any); ok {
+		name, _ = function["name"].(string)
 	}
-	return map[string]any{
-		"name": name, "description": description,
-		"parameters": map[string]any{
-			"type":       "object",
-			"properties": map[string]any{property: map[string]any{"type": "string"}},
-			"required":   []any{property},
-		},
-	}
+	return name
 }

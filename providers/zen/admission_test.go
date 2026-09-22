@@ -69,11 +69,12 @@ func TestAdmissionPreservesMapToolSlices(t *testing.T) {
 func TestAdmitOrdinaryNoToolRequestsWithoutPromptRewrite(t *testing.T) {
 	messages := []map[string]any{{"role": "user", "content": "Explain this failure"}}
 	admitted := AdmitChat(messages, map[string]any{"max_tokens": 32})
-	if messages[0]["content"] != "Explain this failure" || admitted["tool_choice"] != nil || admitted["tools"] != nil {
+	admittedMessages := admitted["messages"].([]map[string]any)
+	if messages[0]["content"] != "Explain this failure" || len(admittedMessages) != 2 || admittedMessages[0]["content"] != AnonymousAssistantPreamble || admitted["tool_choice"] != nil || admitted["tools"] != nil {
 		t.Fatalf("messages=%v admitted=%v", messages, admitted)
 	}
 	responses := AdmitResponses(map[string]any{"instructions": "Be concise", "input": "Explain this failure"})
-	if responses["instructions"] != "Be concise" || responses["input"] != "Explain this failure" || responses["tool_choice"] != nil || responses["tools"] != nil {
+	if responses["instructions"] != AnonymousAssistantPreamble+"\n\nBe concise" || responses["input"] != "Explain this failure" || responses["tool_choice"] != nil || responses["tools"] != nil {
 		t.Fatalf("responses=%v", responses)
 	}
 }

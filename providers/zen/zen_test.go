@@ -186,7 +186,7 @@ func TestDiscoverVerifiedRequiresLiveExactZeroCost(t *testing.T) {
 	defer server.Close()
 	client := testClient(t, server.URL+"/zen", server.URL+"/metadata", time.Now())
 	evidence, err := client.DiscoverVerified(context.Background())
-	if err != nil || len(evidence.Models) != 2 || evidence.Models[0].ID != "beta-free" || evidence.Models[1].ID != "free" || metadataRequests != 1 {
+	if err != nil || len(evidence.Models) != 3 || evidence.Models[0].ID != "beta-free" || evidence.Models[1].ID != "free" || evidence.Models[2].ID != "unstated" || metadataRequests != 1 {
 		t.Fatalf("evidence=%+v err=%v", evidence, err)
 	}
 }

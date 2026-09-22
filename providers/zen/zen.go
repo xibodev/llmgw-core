@@ -347,7 +347,7 @@ func (c *Client) DiscoverVerified(ctx context.Context) (core.CatalogEvidence, er
 
 func verifiedStatus(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "active", "beta":
+	case "", "active", "beta":
 		return true
 	default:
 		return false

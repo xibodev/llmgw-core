@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -73,12 +75,10 @@ func TestCodexCompleteUsesAuthenticatedStreamingResponses(t *testing.T) {
 	fixture := readCodexFixture(t, "response-complete.sse")
 	var request map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/responses" || r.Header.Get("Authorization") != "Bearer caller-token" || r.Header.Get("ChatGPT-Account-ID") != "account-fixture" {
-			t.Fatalf("request path=%q headers=%v", r.URL.Path, r.Header)
-		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatal(err)
 		}
+		assertCodexRequestFixture(t, r, request, "request-chat.json")
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write(fixture)
 	}))
@@ -90,16 +90,10 @@ func TestCodexCompleteUsesAuthenticatedStreamingResponses(t *testing.T) {
 		"tools": []any{map[string]any{"type": "function", "function": map[string]any{
 			"name": "lookup", "description": "Lookup", "parameters": map[string]any{"type": "object"},
 		}}},
-		"reasoning_effort": "high",
+		"prompt_cache_key": "fixture-cache",
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if request["stream"] != true || request["model"] != "codex-alpha-2026-09" || request["instructions"] != "Follow the caller's request." {
-		t.Fatalf("upstream request = %+v", request)
-	}
-	if request["reasoning"].(map[string]any)["effort"] != "high" || len(request["tools"].([]any)) != 1 {
-		t.Fatalf("tools/reasoning missing: %+v", request)
 	}
 	choices := response["choices"].([]any)
 	message := choices[0].(map[string]any)["message"].(map[string]any)
@@ -115,6 +109,7 @@ func TestCodexCompleteResponsesPreservesNativeRequestAndOutput(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatal(err)
 		}
+		assertCodexRequestFixture(t, r, request, "request-native.json")
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, `data: {"type":"response.completed","sequence_number":4,"response":{"id":"resp_native","object":"response","status":"completed","model":"exact-model","conversation":{"id":"conv_1"},"output":[{"id":"rs_1","type":"reasoning","encrypted_content":"opaque","summary":[{"type":"summary_text","text":"kept"}]},{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[{"type":"url_citation","url":"https://example.test"}]}]}]}}`+"\n\n")
 	}))
@@ -131,6 +126,8 @@ func TestCodexCompleteResponsesPreservesNativeRequestAndOutput(t *testing.T) {
 		"conversation":         "conv_1",
 		"include":              []any{"reasoning.encrypted_content"},
 		"reasoning":            map[string]any{"effort": "high", "summary": "auto"},
+		"tools":                []any{map[string]any{"type": "web_search"}},
+		"prompt_cache_key":     "fixture-cache",
 		"force_api_support":    true,
 		"stream":               false,
 	}
@@ -138,23 +135,72 @@ func TestCodexCompleteResponsesPreservesNativeRequestAndOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request["model"] != "exact-model" || request["stream"] != true || request["previous_response_id"] != "resp_previous" || request["conversation"] != "conv_1" {
-		t.Fatalf("native request state was not preserved: %+v", request)
-	}
-	if request["instructions"] != "Required instructions\n\nCaller instructions" || request["force_api_support"] != nil {
-		t.Fatalf("native request constraints were not applied: %+v", request)
-	}
-	include := request["include"].([]any)
-	reasoning := request["reasoning"].(map[string]any)
-	if len(include) != 1 || include[0] != "reasoning.encrypted_content" || reasoning["effort"] != "high" || reasoning["summary"] != "auto" {
-		t.Fatalf("native include/reasoning was not preserved: %+v", request)
-	}
 	output := response["output"].([]any)
 	if len(output) != 2 || output[0].(map[string]any)["encrypted_content"] != "opaque" || response["conversation"].(map[string]any)["id"] != "conv_1" {
 		t.Fatalf("native response output was not preserved: %+v", response)
 	}
 	if payload["stream"] != false || payload["instructions"] != "Caller instructions" {
 		t.Fatalf("caller payload was mutated: %+v", payload)
+	}
+}
+
+func TestCodexCompleteResponsesUsesCompletedOutputItems(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`data: {"type":"response.output_item.done","item":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}}`,
+			`data: {"type":"response.completed","response":{"id":"resp_live","output":[]}}`,
+		}, "\n\n")+"\n\n")
+	}))
+	defer server.Close()
+	provider := newFixtureCodexProvider(t, server, "Required instructions")
+	response, err := provider.CompleteResponses(context.Background(), "exact-model", map[string]any{"input": "continue"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, ok := response["output"].([]any)
+	if !ok || len(output) != 1 || output[0].(map[string]any)["id"] != "msg_1" {
+		t.Fatalf("completed output items were not retained: %+v", response)
+	}
+}
+
+func TestCodexCompleteResponsesUsesStreamedTextWhenItemsAreOmitted(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`data: {"type":"response.output_text.delta","delta":"streamed answer"}`,
+			`data: {"type":"response.completed","response":{"id":"resp_live"}}`,
+		}, "\n\n")+"\n\n")
+	}))
+	defer server.Close()
+	provider := newFixtureCodexProvider(t, server, "Required instructions")
+	response, err := provider.CompleteResponses(context.Background(), "exact-model", map[string]any{"input": "continue"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := response["output"].([]any)
+	content := output[0].(map[string]any)["content"].([]any)
+	if content[0].(map[string]any)["text"] != "streamed answer" {
+		t.Fatalf("streamed text was not retained: %+v", response)
+	}
+}
+
+func TestCodexCompleteResponsesAcceptsMissingStreamingContentType(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header()["Content-Type"] = nil
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`data: {"type":"response.output_text.delta","delta":"answer"}`,
+			`data: {"type":"response.completed","response":{"id":"resp_live"}}`,
+		}, "\n\n")+"\n\n")
+	}))
+	defer server.Close()
+	provider := newFixtureCodexProvider(t, server, "Required instructions")
+	response, err := provider.CompleteResponses(context.Background(), "exact-model", map[string]any{"input": "continue"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response["id"] != "resp_live" {
+		t.Fatalf("response = %+v", response)
 	}
 }
 
@@ -172,6 +218,49 @@ func TestCodexResponsesRejectsUnsupportedExecutionModes(t *testing.T) {
 	} {
 		if _, err := provider.CompleteResponses(context.Background(), "exact-model", payload, nil); err == nil {
 			t.Fatalf("unsupported Codex request accepted: %+v", payload)
+		}
+	}
+}
+
+func TestCodexHTTPErrorExposesOnlyStructuredIdentifiers(t *testing.T) {
+	response := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"Authorization: Bearer secret-token user@example.test","type":"invalid_request_error","code":"unsupported_parameter","param":"max_output_tokens"}}`)),
+	}
+	err := invocationHTTPError(response)
+	want := "Codex upstream request failed (code=unsupported_parameter, type=invalid_request_error, param=max_output_tokens)"
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err, want)
+	}
+	if strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "example.test") {
+		t.Fatalf("error exposed upstream message: %v", err)
+	}
+
+	response.Body = io.NopCloser(strings.NewReader(`{"error":{"type":"invalid request: Bearer secret-token","code":"bad/value","param":"user@example.test"}}`))
+	if got := invocationHTTPError(response).Error(); got != "Codex upstream request failed" {
+		t.Fatalf("unsafe identifiers were exposed: %q", got)
+	}
+}
+
+func TestCodexRejectsUnprovenTools(t *testing.T) {
+	provider, err := NewCodexProvider(CodexProviderConfig{
+		SessionSource: NewCodexTokenSessionSource(auth.NewStaticTokenSource(&auth.Token{AccessToken: "fixture"}), ""),
+		Instructions:  "Required instructions", ResponsesURL: "http://unused",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, payload := range []map[string]any{
+		{"messages": []any{map[string]any{"role": "user", "content": "hello"}}, "tools": []any{map[string]any{"type": "computer"}}},
+		{"input": "hello", "tools": []any{map[string]any{"type": "file_search"}}},
+	} {
+		if payload["messages"] != nil {
+			if _, err := provider.Complete(context.Background(), "exact-model", payload, nil); err == nil {
+				t.Fatalf("unproven Chat tool accepted: %+v", payload)
+			}
+		} else if _, err := provider.CompleteResponses(context.Background(), "exact-model", payload, nil); err == nil {
+			t.Fatalf("unproven Responses tool accepted: %+v", payload)
 		}
 	}
 }
@@ -217,7 +306,7 @@ func TestCodexStreamResponsesPreservesNativeSSEEvents(t *testing.T) {
 }
 
 func TestCodexStreamResponsesRequiresClosedTerminalFrame(t *testing.T) {
-	stream := `data: {"type":"response.completed","response":{"status":"completed","output":[]}}`
+	stream := `data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[]}}`
 	iter := newCodexResponsesStreamIter(io.NopCloser(strings.NewReader(stream)))
 	defer iter.Close()
 
@@ -234,7 +323,7 @@ func TestCodexStreamExposesDeltasToolsReasoningAndUsage(t *testing.T) {
 		`data: {"type":"response.output_text.delta","delta":"answer"}`,
 		`data: {"type":"response.output_item.added","item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"lookup"}}`,
 		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{}"}`,
-		`data: {"type":"response.completed","response":{"status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}`,
 	}, "\n\n") + "\n\n"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -268,7 +357,7 @@ func TestCodexStreamExposesDeltasToolsReasoningAndUsage(t *testing.T) {
 	}
 }
 
-func TestCodexRejectsMaterialLossAndRequiresInstructions(t *testing.T) {
+func TestCodexRejectsUnsupportedFieldsAndRequiresInstructions(t *testing.T) {
 	source := NewCodexTokenSessionSource(auth.NewStaticTokenSource(&auth.Token{AccessToken: "fixture"}), "")
 	if _, err := NewCodexProvider(CodexProviderConfig{SessionSource: source}); err == nil {
 		t.Fatal("empty instructions accepted")
@@ -277,14 +366,45 @@ func TestCodexRejectsMaterialLossAndRequiresInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = provider.Complete(context.Background(), "exact-model", map[string]any{
-		"messages":        []any{map[string]any{"role": "user", "content": "hello"}},
-		"response_format": map[string]any{"type": "json_object"},
-	}, nil)
-	var loss *translate.MaterialLossError
-	var invocation *InvocationError
-	if !errors.As(err, &invocation) || !errors.As(err, &loss) {
-		t.Fatalf("material loss error = %T %v", err, err)
+	for _, payload := range []map[string]any{
+		{"messages": []any{map[string]any{"role": "user", "content": "hello"}}, "temperature": 0.7},
+		{"messages": []any{map[string]any{"role": "user", "content": "hello"}}, "tool_choice": "required"},
+		{"messages": []any{map[string]any{"role": "user", "content": "hello"}}, "response_format": map[string]any{"type": "json_object"}},
+	} {
+		_, err = provider.Complete(context.Background(), "exact-model", payload, nil)
+		var invocation *InvocationError
+		if !errors.As(err, &invocation) || !strings.Contains(err.Error(), "unsupported field") {
+			t.Fatalf("unsupported Chat field error = %T %v", err, err)
+		}
+	}
+	for _, field := range []string{"temperature", "top_p", "max_output_tokens"} {
+		_, err = provider.CompleteResponses(context.Background(), "exact-model", map[string]any{"input": "hello", field: 1}, nil)
+		var invocation *InvocationError
+		if !errors.As(err, &invocation) || !strings.Contains(err.Error(), "unsupported field") {
+			t.Fatalf("unsupported Responses field %q error = %T %v", field, err, err)
+		}
+	}
+}
+
+func TestCodexTerminalStatusMustMatchEventAndOutputMustExist(t *testing.T) {
+	for name, stream := range map[string]string{
+		"contradictory status": `data: {"type":"response.completed","response":{"id":"resp_1","status":"failed","output":[]}}` + "\n\n",
+		"missing output":       `data: {"type":"response.completed","response":{"id":"resp_1","status":"completed"}}` + "\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := readCodexFinalResponse(strings.NewReader(stream)); err == nil {
+				t.Fatal("invalid terminal response accepted")
+			}
+		})
+	}
+}
+
+func TestCodexDecodeErrorDoesNotExposeUpstreamIdentifiers(t *testing.T) {
+	stream := `data: {"type":"Bearer secret-token user@example.test"}` + "\n\n"
+	iter := newCodexStreamIter(io.NopCloser(strings.NewReader(stream)), "exact")
+	_, err := iter.Next()
+	if err == nil || strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "example.test") {
+		t.Fatalf("public error exposed upstream identifier: %v", err)
 	}
 }
 
@@ -383,4 +503,39 @@ func readCodexFixture(t *testing.T, name string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func readCodexJSONFixture(t *testing.T, name string) map[string]any {
+	t.Helper()
+	var fixture map[string]any
+	if err := json.Unmarshal(readCodexFixture(t, name), &fixture); err != nil {
+		t.Fatal(err)
+	}
+	return fixture
+}
+
+func assertCodexRequestFixture(t *testing.T, request *http.Request, body map[string]any, name string) {
+	t.Helper()
+	fixture := readCodexJSONFixture(t, name)
+	wantHeaders := fixture["headers"].(map[string]any)
+	wantHeaders["X-Stainless-Os"] = codexSDKOS()
+	wantHeaders["X-Stainless-Arch"] = codexSDKArch()
+	wantHeaders["X-Stainless-Runtime-Version"] = runtime.Version()
+	gotHeaders := map[string]any{}
+	for name, values := range request.Header {
+		value := strings.Join(values, ", ")
+		if name == "Authorization" && value != "" {
+			value = "Bearer <redacted>"
+		}
+		gotHeaders[name] = value
+	}
+	got := map[string]any{
+		"method":  request.Method,
+		"path":    request.URL.Path,
+		"headers": gotHeaders,
+		"body":    body,
+	}
+	if !reflect.DeepEqual(got, fixture) {
+		t.Fatalf("upstream request drifted:\n got: %#v\nwant: %#v", got, fixture)
+	}
 }

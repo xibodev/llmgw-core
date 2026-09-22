@@ -1,0 +1,12 @@
+{
+  "models": {
+    "model": {
+      "supportsImages": false,
+      "supportsVideo": true,
+      "supportedMimeTypes": {
+        "image/png": true,
+        "video/mp4": true
+      }
+    }
+  }
+}

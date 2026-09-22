@@ -8,11 +8,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"sort"
 	"strings"
@@ -26,6 +28,8 @@ const (
 	antigravityUserAgent      = "antigravity/1.15.8"
 	antigravityGoogAPIClient  = "google-cloud-sdk vscode_cloudshelleditor/0.1"
 	antigravityMaxBodyBytes   = 32 << 20
+	antigravityMaxImageBytes  = 16 << 20
+	antigravityMaxImages      = 1
 )
 
 // ErrExperimentalAntigravityStreamingUnsupported reports that this adapter
@@ -112,11 +116,7 @@ func (p *ExperimentalAntigravityProvider) listModels(ctx context.Context) ([]cor
 		}
 	}
 
-	var response struct {
-		Models map[string]struct {
-			DisplayName string `json:"displayName"`
-		} `json:"models"`
-	}
+	var response antigravityCatalogResponse
 	if err := p.postJSON(ctx, token, "/v1internal:fetchAvailableModels", map[string]any{
 		"project": projectID,
 	}, "antigravity model discovery", &response, false); err != nil {
@@ -132,33 +132,169 @@ func (p *ExperimentalAntigravityProvider) listModels(ctx context.Context) ([]cor
 	sort.Strings(ids)
 	models := make([]core.ModelInfo, 0, len(ids))
 	for _, id := range ids {
+		metadata := response.Models[id]
+		imageGeneration := rosterSupport(response.ImageGenerationModelIDs, id)
+		supportedAPIs := []string{"/v1/chat/completions"}
+		if imageGeneration == core.SupportSupported {
+			supportedAPIs = append(supportedAPIs, "/v1/images/generations")
+		}
 		models = append(models, core.ModelInfo{
-			ID:          id,
-			Object:      "model",
-			OwnedBy:     "google-antigravity",
-			Description: response.Models[id].DisplayName,
-			Capabilities: &core.ModelCapabilities{
-				SchemaVersion: core.ModelCapabilitiesSchemaVersion,
-				Operations: core.ModelOperationCapabilities{
-					Chat: core.SupportSupported,
-				},
-				Surfaces: core.ModelSurfaceCapabilities{
-					ChatCompletions: core.SupportSupported,
-				},
-				Inputs: core.ModelInputCapabilities{
-					Text: core.SupportSupported,
-				},
-				Tools:     core.SupportSupported,
-				Reasoning: core.SupportSupported,
-				Streaming: core.SupportUnknown,
-				Provenance: core.ModelCapabilityProvenance{
-					Source:     core.ModelCapabilitySourceInferred,
-					Confidence: core.ModelCapabilityConfidenceMedium,
-				},
-			},
+			ID:            id,
+			Object:        "model",
+			OwnedBy:       "google-antigravity",
+			Description:   metadata.DisplayName,
+			SupportedAPIs: supportedAPIs,
+			Capabilities:  antigravityModelCapabilities(metadata, imageGeneration, rosterSupport(response.AudioTranscriptionModelIDs, id)),
 		})
 	}
 	return models, token, nil
+}
+
+type antigravityCatalogResponse struct {
+	Models                     map[string]antigravityCatalogModel `json:"models"`
+	AudioTranscriptionModelIDs *[]string                          `json:"audioTranscriptionModelIds"`
+	ImageGenerationModelIDs    *[]string                          `json:"imageGenerationModelIds"`
+	TabModelIDs                []string                           `json:"tabModelIds"`
+	TieredModelIDs             struct {
+		Flash     []string `json:"flash"`
+		FlashLite []string `json:"flashLite"`
+		Pro       []string `json:"pro"`
+	} `json:"tieredModelIds"`
+}
+
+type antigravityCatalogModel struct {
+	DisplayName string `json:"displayName"`
+	// MIME types and video support are retained as bounded upstream observations,
+	// but are not routing facts in the version 1 capability schema.
+	SupportedMimeTypes map[string]bool `json:"supportedMimeTypes"`
+	SupportsImages     *bool           `json:"supportsImages"`
+	SupportsThinking   *bool           `json:"supportsThinking"`
+	SupportsVideo      *bool           `json:"supportsVideo"`
+}
+
+func antigravityModelCapabilities(metadata antigravityCatalogModel, imageGeneration, audioTranscription core.Support) *core.ModelCapabilities {
+	capabilities := &core.ModelCapabilities{
+		SchemaVersion: core.ModelCapabilitiesSchemaVersion,
+		Operations: core.ModelOperationCapabilities{
+			Chat: core.SupportSupported,
+		},
+		Surfaces: core.ModelSurfaceCapabilities{
+			ChatCompletions: core.SupportSupported,
+		},
+		Inputs: core.ModelInputCapabilities{
+			Text: core.SupportSupported,
+		},
+		Provenance: core.ModelCapabilityProvenance{
+			Source:     core.ModelCapabilitySourceInferred,
+			Confidence: core.ModelCapabilityConfidenceMedium,
+		},
+	}
+	if metadata.SupportsThinking != nil {
+		capabilities.Reasoning = supportFromBool(*metadata.SupportsThinking)
+	}
+	capabilities.Operations.Image = imageGeneration
+	capabilities.Operations.AudioIn = audioTranscription
+	return capabilities
+}
+
+func rosterSupport(roster *[]string, model string) core.Support {
+	if roster == nil {
+		return core.SupportUnknown
+	}
+	if stringSet(*roster)[model] {
+		return core.SupportSupported
+	}
+	return core.SupportUnsupported
+}
+
+func stringSet(values []string) map[string]bool {
+	set := make(map[string]bool, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			set[value] = true
+		}
+	}
+	return set
+}
+
+// GenerateImages requests Gemini text and image response modalities. The
+// selected model must be present in both the root roster and the upstream
+// imageGenerationModelIds list observed in this same operation.
+func (p *ExperimentalAntigravityProvider) GenerateImages(ctx context.Context, request core.GenerateImagesRequest, _ *core.Credential) (core.GenerateImagesResult, error) {
+	result, rejectedToken, err := p.generateImages(ctx, request)
+	recovered, recoveryErr := p.recoverUnauthorized(ctx, rejectedToken, err)
+	if recoveryErr != nil {
+		return core.GenerateImagesResult{}, recoveryErr
+	}
+	if recovered {
+		result, _, err = p.generateImages(ctx, request)
+	}
+	return result, err
+}
+
+func (p *ExperimentalAntigravityProvider) generateImages(ctx context.Context, request core.GenerateImagesRequest) (core.GenerateImagesResult, string, error) {
+	request.Model = strings.TrimSpace(request.Model)
+	request.Prompt = strings.TrimSpace(request.Prompt)
+	if request.Model == "" || request.Prompt == "" {
+		return core.GenerateImagesResult{}, "", core.NewProviderOperationError("antigravity image generation validation", http.StatusBadRequest, "", errors.New("model and prompt are required"))
+	}
+	if request.Count == 0 {
+		request.Count = 1
+	}
+	if request.Count < 0 {
+		return core.GenerateImagesResult{}, "", core.NewProviderOperationError("antigravity image generation validation", http.StatusBadRequest, "", errors.New("count must not be negative"))
+	}
+	if request.Count > antigravityMaxImages {
+		return core.GenerateImagesResult{}, "", core.NewProviderOperationError("antigravity image generation validation", http.StatusBadRequest, "", fmt.Errorf("count exceeds %d", antigravityMaxImages))
+	}
+	token, projectID, err := p.authentication(ctx)
+	if err != nil {
+		return core.GenerateImagesResult{}, "", err
+	}
+	if projectID == "" {
+		projectID, err = p.loadCodeAssist(ctx, token)
+		if err != nil {
+			return core.GenerateImagesResult{}, token, err
+		}
+		if p.project != nil {
+			if err := p.project(ctx, token, projectID); err != nil {
+				return core.GenerateImagesResult{}, token, fmt.Errorf("antigravity project observation: %w", err)
+			}
+		}
+	}
+	var catalog antigravityCatalogResponse
+	if err := p.postJSON(ctx, token, "/v1internal:fetchAvailableModels", map[string]any{"project": projectID}, "antigravity model discovery", &catalog, false); err != nil {
+		return core.GenerateImagesResult{}, token, err
+	}
+	if _, rootMember := catalog.Models[request.Model]; !rootMember || rosterSupport(catalog.ImageGenerationModelIDs, request.Model) != core.SupportSupported {
+		return core.GenerateImagesResult{}, token, core.NewProviderOperationError("antigravity image model unsupported", http.StatusBadRequest, "", nil)
+	}
+
+	requestID := newAntigravityID("agent")
+	envelope := map[string]any{
+		"project": projectID,
+		"model":   request.Model,
+		"request": map[string]any{
+			"contents":         []any{map[string]any{"role": "user", "parts": []any{map[string]any{"text": request.Prompt}}}},
+			"generationConfig": map[string]any{"responseModalities": []string{"TEXT", "IMAGE"}},
+		},
+		"requestType": "agent",
+		"userAgent":   "antigravity",
+		"requestId":   requestID,
+	}
+	var body bytes.Buffer
+	if err := p.postJSON(ctx, token, "/v1internal:streamGenerateContent?alt=sse", envelope, "antigravity image generation", &body, true); err != nil {
+		return core.GenerateImagesResult{}, token, err
+	}
+	result, err := parseAntigravityImageSSE(&body, request.Count)
+	return result, token, err
+}
+
+func supportFromBool(value bool) core.Support {
+	if value {
+		return core.SupportSupported
+	}
+	return core.SupportUnsupported
 }
 
 func (p *ExperimentalAntigravityProvider) Complete(ctx context.Context, model string, payload map[string]any, _ *core.Credential) (map[string]any, error) {
@@ -293,14 +429,18 @@ func (p *ExperimentalAntigravityProvider) postJSON(ctx context.Context, token, p
 		return core.NewProviderOperationError(op, resp.StatusCode, resp.Header.Get("Retry-After"), nil)
 	}
 
-	limited := io.LimitReader(resp.Body, antigravityMaxBodyBytes)
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, antigravityMaxBodyBytes+1))
+	if err != nil {
+		return core.NewProviderOperationError(op+" response read", resp.StatusCode, "", err)
+	}
+	if len(responseBody) > antigravityMaxBodyBytes {
+		return core.NewProviderOperationError(op+" response read", resp.StatusCode, "", errors.New("response exceeds the size limit"))
+	}
 	if destination, ok := result.(*bytes.Buffer); ok {
-		if _, err := destination.ReadFrom(limited); err != nil {
-			return core.NewProviderOperationError(op+" response read", resp.StatusCode, "", err)
-		}
+		_, _ = destination.Write(responseBody)
 		return nil
 	}
-	if err := json.NewDecoder(limited).Decode(result); err != nil {
+	if err := json.Unmarshal(responseBody, result); err != nil {
 		return core.NewProviderOperationError(op+" response decode", resp.StatusCode, "", err)
 	}
 	return nil
@@ -605,6 +745,93 @@ type antigravitySSEEnvelope struct {
 	} `json:"response"`
 }
 
+type antigravityImageSSEEnvelope struct {
+	Response struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					InlineData      *antigravityInlineData `json:"inlineData"`
+					InlineDataSnake *antigravityInlineData `json:"inline_data"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+		Usage map[string]any `json:"usageMetadata"`
+	} `json:"response"`
+}
+
+type antigravityInlineData struct {
+	MimeType      string `json:"mimeType"`
+	MimeTypeSnake string `json:"mime_type"`
+	Data          string `json:"data"`
+}
+
+func parseAntigravityImageSSE(reader io.Reader, count int) (core.GenerateImagesResult, error) {
+	result := core.GenerateImagesResult{Images: make([]core.GeneratedImage, 0, count)}
+	err := readSSEData(reader, func(data []byte) error {
+		if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
+			return nil
+		}
+		var event antigravityImageSSEEnvelope
+		if err := json.Unmarshal(data, &event); err != nil {
+			return fmt.Errorf("decode antigravity image SSE event: %w", err)
+		}
+		if event.Response.Usage != nil {
+			result.Usage = event.Response.Usage
+		}
+		for _, candidate := range event.Response.Candidates {
+			for _, part := range candidate.Content.Parts {
+				inline := part.InlineData
+				if inline == nil {
+					inline = part.InlineDataSnake
+				}
+				if inline == nil || len(result.Images) >= count {
+					continue
+				}
+				mimeType := strings.TrimSpace(inline.MimeType)
+				if mimeType == "" {
+					mimeType = strings.TrimSpace(inline.MimeTypeSnake)
+				}
+				mediaType, _, err := mime.ParseMediaType(mimeType)
+				if err != nil || !safeAntigravityImageMediaType(mediaType) || strings.TrimSpace(inline.Data) == "" {
+					return fmt.Errorf("antigravity image response contained invalid inline image metadata")
+				}
+				if base64.StdEncoding.DecodedLen(len(inline.Data)) > antigravityMaxImageBytes {
+					return fmt.Errorf("antigravity inline image exceeds the size limit")
+				}
+				decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(inline.Data))
+				raw, err := io.ReadAll(io.LimitReader(decoder, antigravityMaxImageBytes+1))
+				if err != nil {
+					return fmt.Errorf("decode antigravity inline image: %w", err)
+				}
+				if len(raw) == 0 {
+					return fmt.Errorf("antigravity inline image decoded to empty data")
+				}
+				if len(raw) > antigravityMaxImageBytes {
+					return fmt.Errorf("antigravity inline image exceeds the size limit")
+				}
+				result.Images = append(result.Images, core.GeneratedImage{Data: raw, MimeType: mediaType})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return core.GenerateImagesResult{}, core.NewProviderOperationError("antigravity image response decode", http.StatusOK, "", err)
+	}
+	if len(result.Images) == 0 {
+		return core.GenerateImagesResult{}, core.NewProviderOperationError("antigravity image response decode", http.StatusOK, "", errors.New("response contained no image data"))
+	}
+	return result, nil
+}
+
+func safeAntigravityImageMediaType(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "image/png", "image/jpeg", "image/webp":
+		return true
+	default:
+		return false
+	}
+}
+
 func parseAntigravitySSE(reader io.Reader, model, requestID string) (map[string]any, error) {
 	var content strings.Builder
 	var reasoning strings.Builder
@@ -729,3 +956,4 @@ func newAntigravityID(prefix string) string {
 }
 
 var _ Provider = (*ExperimentalAntigravityProvider)(nil)
+var _ core.ImageGenerator = (*ExperimentalAntigravityProvider)(nil)

@@ -1,0 +1,3 @@
+data: {"response":{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"Zml4dHVyZS1wbmc="}},{"inline_data":{"mime_type":"image/webp","data":"Zml4dHVyZS13ZWJw"}}]}}],"usageMetadata":{"totalTokenCount":7}}}
+
+data: [DONE]

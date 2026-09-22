@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -23,8 +25,12 @@ import (
 const (
 	codexMaxCatalogBytes  = 4 << 20
 	codexMaxSSEEventBytes = 4 << 20
+	codexMaxErrorBytes    = 64 << 10
 	codexCatalogTTL       = time.Hour
+	codexOpenAIGoVersion  = "3.22.0"
 )
+
+var codexErrorIdentifier = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 
 // CodexSession is the storage-neutral authenticated state needed by the
 // official Codex transport. The source remains responsible for refresh and
@@ -228,9 +234,13 @@ func (p *CodexProvider) responsesRequest(model string, payload map[string]any) (
 	options := make(map[string]any, len(payload))
 	for key, value := range payload {
 		switch key {
-		case "messages", "model", "stream":
-		default:
+		case "messages", "model", "stream", "prompt_cache_key":
+		case "tools":
 			options[key] = value
+		default:
+			if value != nil {
+				return nil, &InvocationError{Msg: "Codex request contains unsupported field " + key}
+			}
 		}
 	}
 	converted := translate.ChatToResponsesWithReport(model, messages, options, true)
@@ -238,6 +248,9 @@ func (p *CodexProvider) responsesRequest(model string, payload map[string]any) (
 		return nil, &InvocationError{Msg: "Codex request contains unsupported fields", Cause: err}
 	}
 	request := converted.Value
+	if err := validateCodexTools(request["tools"]); err != nil {
+		return nil, &InvocationError{Msg: "Codex request contains unsupported tools", Cause: err}
+	}
 	if existing, _ := request["instructions"].(string); existing != "" {
 		request["instructions"] = p.instructions + "\n\n" + existing
 	} else {
@@ -245,6 +258,10 @@ func (p *CodexProvider) responsesRequest(model string, payload map[string]any) (
 	}
 	request["model"] = model
 	request["stream"] = true
+	request["store"] = false
+	if cacheKey, _ := payload["prompt_cache_key"].(string); cacheKey != "" {
+		request["prompt_cache_key"] = cacheKey
+	}
 	return request, nil
 }
 
@@ -261,11 +278,28 @@ func (p *CodexProvider) nativeResponsesRequest(model string, payload map[string]
 	if background, ok := payload["background"].(bool); ok && background {
 		return nil, &InvocationError{Msg: "Codex Responses does not support background=true"}
 	}
-	request := make(map[string]any, len(payload)+2)
+	request := make(map[string]any, len(payload)+3)
+	allowed := map[string]bool{
+		"input": true, "instructions": true, "tools": true, "prompt_cache_key": true,
+		"previous_response_id": true, "conversation": true, "include": true, "reasoning": true,
+		"model": true, "stream": true, "store": true, "background": true,
+		"force_api_support": true,
+	}
 	for key, value := range payload {
-		if key != "force_api_support" {
+		if value != nil && !allowed[key] {
+			return nil, &InvocationError{Msg: "Codex Responses request contains unsupported field " + key}
+		}
+	}
+	for _, key := range []string{
+		"input", "instructions", "tools", "prompt_cache_key",
+		"previous_response_id", "conversation", "include", "reasoning",
+	} {
+		if value := payload[key]; value != nil {
 			request[key] = value
 		}
+	}
+	if err := validateCodexTools(request["tools"]); err != nil {
+		return nil, &InvocationError{Msg: "Codex Responses request contains unsupported tools", Cause: err}
 	}
 	if instructions, exists := request["instructions"]; exists && instructions != nil {
 		text, ok := instructions.(string)
@@ -282,6 +316,7 @@ func (p *CodexProvider) nativeResponsesRequest(model string, payload map[string]
 	}
 	request["model"] = model
 	request["stream"] = true
+	request["store"] = false
 	return request, nil
 }
 
@@ -304,6 +339,27 @@ func codexMessages(value any) ([]map[string]any, error) {
 	}
 }
 
+func validateCodexTools(value any) error {
+	if value == nil {
+		return nil
+	}
+	tools, ok := value.([]any)
+	if !ok {
+		return fmt.Errorf("tools must be an array")
+	}
+	for i, raw := range tools {
+		tool, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("tool %d must be an object", i)
+		}
+		kind, _ := tool["type"].(string)
+		if kind != "function" && kind != "web_search" {
+			return fmt.Errorf("tool %d has unsupported type %q", i, kind)
+		}
+	}
+	return nil
+}
+
 func (p *CodexProvider) doResponses(ctx context.Context, payload map[string]any) (*http.Response, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -314,7 +370,8 @@ func (p *CodexProvider) doResponses(ctx context.Context, payload map[string]any)
 		return nil, &InvocationError{Msg: "Codex request could not be created", Cause: err}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Accept", "application/json")
+	setCodexSDKHeaders(req.Header)
 	if err := p.authorize(ctx, req); err != nil {
 		return nil, &InvocationError{Msg: "Codex authentication failed", Cause: err}
 	}
@@ -331,7 +388,7 @@ func (p *CodexProvider) doResponses(ctx context.Context, payload map[string]any)
 		return nil, invocationHTTPError(resp)
 	}
 	mediaType := strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0])
-	if !strings.EqualFold(mediaType, "text/event-stream") {
+	if mediaType != "" && !strings.EqualFold(mediaType, "text/event-stream") {
 		resp.Body.Close()
 		return nil, invocationDecodeError(fmt.Errorf("Codex response content type %q is not text/event-stream", mediaType))
 	}
@@ -354,9 +411,52 @@ func (p *CodexProvider) authorize(ctx context.Context, req *http.Request) error 
 	req.Header.Set("OpenAI-Beta", "responses=experimental")
 	req.Header.Set("originator", "codex_cli_rs")
 	if session.AccountID != "" {
-		req.Header.Set("ChatGPT-Account-ID", session.AccountID)
+		req.Header.Set("Chatgpt-Account-Id", session.AccountID)
 	}
 	return nil
+}
+
+func setCodexSDKHeaders(header http.Header) {
+	header.Set("User-Agent", "OpenAI/Go "+codexOpenAIGoVersion)
+	header.Set("X-Stainless-Lang", "go")
+	header.Set("X-Stainless-Package-Version", codexOpenAIGoVersion)
+	header.Set("X-Stainless-OS", codexSDKOS())
+	header.Set("X-Stainless-Arch", codexSDKArch())
+	header.Set("X-Stainless-Runtime", "go")
+	header.Set("X-Stainless-Runtime-Version", runtime.Version())
+	header.Set("X-Stainless-Retry-Count", "0")
+}
+
+func codexSDKOS() string {
+	switch runtime.GOOS {
+	case "ios":
+		return "iOS"
+	case "android":
+		return "Android"
+	case "darwin":
+		return "MacOS"
+	case "freebsd":
+		return "FreeBSD"
+	case "openbsd":
+		return "OpenBSD"
+	case "linux":
+		return "Linux"
+	default:
+		return "Other:" + runtime.GOOS
+	}
+}
+
+func codexSDKArch() string {
+	switch runtime.GOARCH {
+	case "386":
+		return "x32"
+	case "amd64":
+		return "x64"
+	case "arm", "arm64":
+		return runtime.GOARCH
+	default:
+		return "other:" + runtime.GOARCH
+	}
 }
 
 func parseCodexCatalog(raw []byte, discoveredAt time.Time) ([]core.ModelInfo, error) {
@@ -596,6 +696,8 @@ func (s *codexResponsesStreamIter) Close() error { return s.body.Close() }
 
 func readCodexFinalResponse(reader io.Reader) (map[string]any, error) {
 	events := newCodexSSEReader(reader)
+	output := make([]any, 0)
+	var text strings.Builder
 	for {
 		event, err := events.Next()
 		if err != nil {
@@ -608,9 +710,29 @@ func readCodexFinalResponse(reader io.Reader) (map[string]any, error) {
 			continue
 		}
 		switch event.Type {
+		case "response.output_text.delta":
+			text.WriteString(event.Delta)
+		case "response.output_item.done":
+			if len(event.Item) > 0 {
+				output = append(output, event.Item)
+			}
 		case "response.completed", "response.incomplete":
+			terminalOutput, _ := event.Response["output"].([]any)
+			if len(terminalOutput) == 0 && len(output) > 0 {
+				event.Response["output"] = output
+				terminalOutput = output
+			}
+			if len(terminalOutput) == 0 && text.Len() > 0 {
+				event.Response["output"] = []any{map[string]any{
+					"type": "message", "role": "assistant",
+					"content": []any{map[string]any{"type": "output_text", "text": text.String()}},
+				}}
+			}
 			if err := validateTerminalResponse(event.Response, event.Type); err != nil {
 				return nil, err
+			}
+			if _, ok := event.Response["output"].([]any); !ok {
+				return nil, fmt.Errorf("terminal Codex response output is missing")
 			}
 			return event.Response, nil
 		case "response.failed", "error":
@@ -625,13 +747,14 @@ func validateTerminalResponse(response map[string]any, eventType string) error {
 	if len(response) == 0 {
 		return fmt.Errorf("%s did not contain a response", eventType)
 	}
-	status, _ := response["status"].(string)
-	want := strings.TrimPrefix(eventType, "response.")
-	if status != want {
-		return fmt.Errorf("%s carried response status %q", eventType, status)
+	if id, _ := response["id"].(string); strings.TrimSpace(id) == "" {
+		return fmt.Errorf("%s did not contain a response ID", eventType)
 	}
-	if _, ok := response["output"].([]any); !ok {
-		return fmt.Errorf("terminal Codex response output is missing")
+	if status, _ := response["status"].(string); status != "" {
+		want := strings.TrimPrefix(eventType, "response.")
+		if status != want {
+			return fmt.Errorf("%s carried a contradictory response status", eventType)
+		}
 	}
 	return nil
 }
@@ -818,11 +941,45 @@ func invocationDecodeError(err error) error {
 func invocationHTTPError(response *http.Response) error {
 	retryAfter := parseRetryAfterHeader(response.Header.Get("Retry-After"), time.Now())
 	status := response.StatusCode
+	message := "Codex upstream request failed"
+	if raw, err := readLimited(response.Body, codexMaxErrorBytes); err == nil {
+		if diagnostic := codexErrorDiagnostic(raw); diagnostic != "" {
+			message += " (" + diagnostic + ")"
+		}
+	}
 	return &InvocationError{
-		Msg: "Codex upstream request failed", Status: status, RetryAfter: retryAfter,
+		Msg: message, Status: status, RetryAfter: retryAfter,
 		Retryable:        status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= 500,
 		FailoverEligible: status == http.StatusTooManyRequests || status >= 500,
 	}
+}
+
+func codexErrorDiagnostic(raw []byte) string {
+	var envelope struct {
+		Error struct {
+			Code  any    `json:"code"`
+			Type  string `json:"type"`
+			Param string `json:"param"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return ""
+	}
+	values := []struct {
+		name  string
+		value string
+	}{
+		{name: "code", value: fmt.Sprint(envelope.Error.Code)},
+		{name: "type", value: envelope.Error.Type},
+		{name: "param", value: envelope.Error.Param},
+	}
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		if value.value != "" && value.value != "<nil>" && codexErrorIdentifier.MatchString(value.value) {
+			parts = append(parts, value.name+"="+value.value)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 func catalogHTTPError(response *http.Response) error {

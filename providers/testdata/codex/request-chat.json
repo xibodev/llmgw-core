@@ -1,0 +1,45 @@
+{
+  "method": "POST",
+  "path": "/responses",
+  "headers": {
+    "Accept": "application/json",
+    "Accept-Encoding": "gzip",
+    "Authorization": "Bearer <redacted>",
+    "Chatgpt-Account-Id": "account-fixture",
+    "Content-Length": "291",
+    "Content-Type": "application/json",
+    "Openai-Beta": "responses=experimental",
+    "Originator": "codex_cli_rs",
+    "User-Agent": "OpenAI/Go 3.22.0",
+    "X-Stainless-Arch": "<runtime>",
+    "X-Stainless-Lang": "go",
+    "X-Stainless-Os": "<runtime>",
+    "X-Stainless-Package-Version": "3.22.0",
+    "X-Stainless-Retry-Count": "0",
+    "X-Stainless-Runtime": "go",
+    "X-Stainless-Runtime-Version": "<runtime>"
+  },
+  "body": {
+    "model": "codex-alpha-2026-09",
+    "input": [
+    {
+      "role": "user",
+      "content": "Use the tool"
+    }
+    ],
+    "instructions": "Follow the caller's request.",
+    "tools": [
+    {
+      "type": "function",
+      "name": "lookup",
+      "description": "Lookup",
+      "parameters": {
+        "type": "object"
+      }
+    }
+    ],
+    "prompt_cache_key": "fixture-cache",
+    "stream": true,
+    "store": false
+  }
+}

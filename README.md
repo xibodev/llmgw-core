@@ -115,6 +115,19 @@ The wire-level contract shared by products and transports:
   accepts, by field-path glob, class and severity. Allowed losses are still
   reported, in `Response.Losses` and through a stream's `LossReporter`.
 
+Products supply three stores, each with an in-memory reference implementation:
+
+- **`CredentialStore`** is the llm-provider-auth token store plus
+  `Resolve(ctx, caller, instance)`, which returns the key of the credential that
+  serves a caller. Which credential applies is product policy. The Runtime keeps
+  it fresh through `tokenstore.Coordinator`. `APIKeyRecord` stores a static key
+  that never refreshes. Reference: `NewMemoryCredentialStore`.
+- **`CatalogStore`** keeps discovered catalogs, with a new revision on every save.
+  `Save` must be atomic for readers in any process. Run `catalogtest.Run`
+  against every implementation. Reference: `NewMemoryCatalogStore`.
+- **`EvidenceSink`** receives `AccountEvidence`: which credential served which
+  operation, and the classified outcome. Reference: `MemoryEvidenceSink`.
+
 ## License
 
 MIT

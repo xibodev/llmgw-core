@@ -128,6 +128,37 @@ Products supply three stores, each with an in-memory reference implementation:
 - **`EvidenceSink`** receives `AccountEvidence`: which credential served which
   operation, and the classified outcome. Reference: `MemoryEvidenceSink`.
 
+## Runtime
+
+`runtime.Runtime` is the one value that owns a product's provider state: the
+registry, the provider cache, the refresh coordinators, the catalog cache and
+health. The core packages keep no package state and read no environment, and
+an architecture test enforces both.
+
+```go
+rt, err := runtime.New(runtime.Options[Settings]{
+    Settings:    settingsSource, // Snapshot() (Settings, generation)
+    Providers:   buildProvider,  // func(Settings, instance) (core.Provider, error)
+    Credentials: credentialStore,
+    Refresh:     oauthRefresh,   // per instance; nil means credentials never refresh
+    Catalogs:    catalogStore,
+    Evidence:    evidenceSink,
+    Registry:    registry,
+})
+response, err := rt.Invoke(ctx, caller, "openai", request)
+```
+
+The Runtime works with the product's own settings type:
+
+- It rebuilds providers and coordinators when the settings generation changes.
+- It resolves each caller's credential and refreshes an OAuth credential the
+  upstream rejects with 401, once, before replaying. Static API keys are never
+  replayed.
+- It serves stored catalogs while they are fresh, sharing them across processes
+  through the `CatalogStore`.
+- Only upstream outcomes (an HTTP status or a transport failure) change an
+  instance's health.
+
 ## License
 
 MIT

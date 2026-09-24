@@ -159,6 +159,17 @@ The Runtime works with the product's own settings type:
 - Only upstream outcomes (an HTTP status or a transport failure) change an
   instance's health.
 
+`translation.Adapter{Provider, Policy}` serves surfaces a provider lacks by
+translating through llm-translate:
+
+- Messages over Chat Completions, streaming included.
+- Chat Completions over Responses.
+- Responses over Chat Completions.
+
+Request losses are checked against the `LossPolicy` before the provider is
+called. All losses, including the provider's own, are returned in
+`Response.Losses` or through the stream's `LossReporter`.
+
 ## License
 
 MIT

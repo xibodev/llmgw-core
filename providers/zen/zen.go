@@ -406,9 +406,13 @@ func admittedStatus(status string) bool {
 	}
 }
 
-var monetaryCostKeys = map[string]bool{
-	"input": true, "output": true, "reasoning": true, "cache_read": true,
-	"cache_write": true, "input_audio": true, "output_audio": true,
+// monetaryCostKey reports the price fields that must be exactly zero.
+func monetaryCostKey(key string) bool {
+	switch key {
+	case "input", "output", "reasoning", "cache_read", "cache_write", "input_audio", "output_audio":
+		return true
+	}
+	return false
 }
 
 // exactZeroCost rejects absent required prices, strings, unknown fields,
@@ -419,7 +423,7 @@ func exactZeroCost(cost map[string]json.RawMessage) bool {
 		return false
 	}
 	for key, raw := range cost {
-		if monetaryCostKeys[key] {
+		if monetaryCostKey(key) {
 			if !rawZero(raw) {
 				return false
 			}

@@ -66,40 +66,48 @@ func explicitTitleInstruction(value string) bool {
 	return value == "you are a title generator" || strings.HasPrefix(value, "you are a title generator.")
 }
 
-var compatibilityChatTools = []map[string]any{
-	{
-		"type": "function",
-		"function": map[string]any{
-			"name": "bash", "description": "Executes a given bash/powershell command.",
+// compatibilityChatTools returns fresh tool definitions on every call: they are
+// inserted into outgoing requests, so a shared value would let a caller that
+// mutates its request change them for every later request.
+func compatibilityChatTools() []map[string]any {
+	return []map[string]any{
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name": "bash", "description": "Executes a given bash/powershell command.",
+				"parameters": map[string]any{"type": "object", "properties": map[string]any{
+					"command": map[string]any{"type": "string", "description": "The command to execute"},
+				}, "required": []any{"command"}},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name": "read", "description": "Read a file from the local filesystem.",
+				"parameters": map[string]any{"type": "object", "properties": map[string]any{
+					"filePath": map[string]any{"type": "string", "description": "The absolute path to the file to read"},
+				}, "required": []any{"filePath"}},
+			},
+		},
+	}
+}
+
+// compatibilityResponsesTools is the Responses-wire form of compatibilityChatTools.
+func compatibilityResponsesTools() []map[string]any {
+	return []map[string]any{
+		{
+			"type": "function", "name": "bash", "description": "Executes a given bash/powershell command.",
 			"parameters": map[string]any{"type": "object", "properties": map[string]any{
 				"command": map[string]any{"type": "string", "description": "The command to execute"},
 			}, "required": []any{"command"}},
 		},
-	},
-	{
-		"type": "function",
-		"function": map[string]any{
-			"name": "read", "description": "Read a file from the local filesystem.",
+		{
+			"type": "function", "name": "read", "description": "Read a file from the local filesystem.",
 			"parameters": map[string]any{"type": "object", "properties": map[string]any{
 				"filePath": map[string]any{"type": "string", "description": "The absolute path to the file to read"},
 			}, "required": []any{"filePath"}},
 		},
-	},
-}
-
-var compatibilityResponsesTools = []map[string]any{
-	{
-		"type": "function", "name": "bash", "description": "Executes a given bash/powershell command.",
-		"parameters": map[string]any{"type": "object", "properties": map[string]any{
-			"command": map[string]any{"type": "string", "description": "The command to execute"},
-		}, "required": []any{"command"}},
-	},
-	{
-		"type": "function", "name": "read", "description": "Read a file from the local filesystem.",
-		"parameters": map[string]any{"type": "object", "properties": map[string]any{
-			"filePath": map[string]any{"type": "string", "description": "The absolute path to the file to read"},
-		}, "required": []any{"filePath"}},
-	},
+	}
 }
 
 // AdmitChat restores the anonymous CLI's multi-turn compatibility contract
@@ -115,7 +123,7 @@ func AdmitChat(messages []map[string]any, payload map[string]any) map[string]any
 		out["messages"] = admitFirstTurnMessages(messages)
 		return out
 	}
-	out["tools"] = ensureTools(out["tools"], compatibilityChatTools)
+	out["tools"] = ensureTools(out["tools"], compatibilityChatTools())
 	if out["tool_choice"] == nil {
 		out["tool_choice"] = "auto"
 	}
@@ -140,7 +148,7 @@ func AdmitResponses(payload map[string]any) map[string]any {
 		}
 		return out
 	}
-	out["tools"] = ensureTools(out["tools"], compatibilityResponsesTools)
+	out["tools"] = ensureTools(out["tools"], compatibilityResponsesTools())
 	if out["tool_choice"] == nil {
 		out["tool_choice"] = "auto"
 	}

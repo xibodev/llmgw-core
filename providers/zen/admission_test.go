@@ -91,6 +91,29 @@ func TestAdmitMultiTurnDefaultsCompatibilityToolsAndAutoChoice(t *testing.T) {
 	}
 }
 
+// TestAdmittedCompatibilityToolsAreNotShared pins that each admitted request
+// gets its own tool definitions: mutating one request must not change the
+// next.
+func TestAdmittedCompatibilityToolsAreNotShared(t *testing.T) {
+	messages := []map[string]any{{"role": "user", "content": "one"}, {"role": "assistant", "content": "two"}, {"role": "user", "content": "three"}}
+	first := AdmitChat(messages, map[string]any{})
+	tool := first["tools"].([]any)[0].(map[string]any)
+	tool["type"] = "mutated"
+	tool["function"].(map[string]any)["name"] = "mutated"
+	second := AdmitChat(messages, map[string]any{})
+	if got := toolNames(second["tools"].([]any)); !reflect.DeepEqual(got, []string{"bash", "read"}) || second["tools"].([]any)[0].(map[string]any)["type"] != "function" {
+		t.Fatalf("a mutation of one admitted request leaked into the next: %v", second["tools"])
+	}
+
+	input := []any{map[string]any{"role": "user", "content": "one"}, map[string]any{"role": "user", "content": "two"}}
+	responses := AdmitResponses(map[string]any{"input": input})
+	responses["tools"].([]any)[0].(map[string]any)["name"] = "mutated"
+	again := AdmitResponses(map[string]any{"input": input})
+	if got := toolNames(again["tools"].([]any)); !reflect.DeepEqual(got, []string{"bash", "read"}) {
+		t.Fatalf("a mutation of one admitted Responses request leaked into the next: %v", again["tools"])
+	}
+}
+
 func TestExplicitTitleRequestsRemainToolFreeAndUnchanged(t *testing.T) {
 	chatPayload := map[string]any{"max_tokens": 16}
 	titleMessages := []map[string]any{{"role": "system", "content": "You are a title generator. Output one title."}, {"role": "user", "content": "hello"}}

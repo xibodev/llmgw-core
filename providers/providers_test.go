@@ -16,8 +16,8 @@ import (
 
 func TestRegistryIntegrityAndManifest(t *testing.T) {
 	entries := providers.ProviderRegistry()
-	if len(entries) != 24 {
-		t.Fatalf("expected 24 registry entries, got %d", len(entries))
+	if len(entries) != 25 {
+		t.Fatalf("expected 25 registry entries, got %d", len(entries))
 	}
 
 	seen := make(map[string]bool)

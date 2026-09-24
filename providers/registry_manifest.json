@@ -63,7 +63,7 @@
       "chatgpt"
     ],
     "label": "OpenAI Codex",
-    "description": "Owner-private Codex device authorization with the verified Responses transport. Authenticate with your ChatGPT / OpenAI account.",
+    "description": "Owner-private Codex browser or device authorization with the verified Responses transport. Authenticate with your ChatGPT / OpenAI account.",
     "categories": [
       "coding",
       "oauth",
@@ -73,6 +73,7 @@
     "protocol": "openai",
     "availability": "available",
     "auth_methods": [
+      "oauth_browser",
       "oauth_device"
     ],
     "connection_scope": "personal",
@@ -116,7 +117,7 @@
   {
     "id": "anthropic",
     "label": "Anthropic",
-    "description": "Native Anthropic Messages API using an Anthropic API key.",
+    "description": "Native Anthropic Messages API using an API key or a write-only setup token.",
     "categories": [
       "api-key",
       "direct"
@@ -125,7 +126,8 @@
     "protocol": "anthropic",
     "availability": "available",
     "auth_methods": [
-      "api_key"
+      "api_key",
+      "setup_token"
     ],
     "connection_scope": "system_or_personal",
     "default_provider_id": "anthropic",
@@ -133,10 +135,40 @@
     "requires_api_key": true,
     "supports_model_discovery": true,
     "onboarding_fields": [
-      "api_key"
+      "api_key",
+      "setup_token"
     ],
     "risk_level": "green",
     "docs_url": "https://docs.anthropic.com/en/api"
+  },
+  {
+    "id": "google_antigravity",
+    "aliases": [
+      "antigravity",
+      "google-antigravity"
+    ],
+    "label": "Google Antigravity",
+    "description": "Experimental personal browser OAuth access to Google's undocumented Cloud Code Assist surface.",
+    "categories": [
+      "experimental",
+      "coding",
+      "oauth"
+    ],
+    "runtime_type": "google_antigravity",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "oauth_browser"
+    ],
+    "connection_scope": "personal",
+    "default_provider_id": "google-antigravity",
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "human_owner"
+    ],
+    "auth_adapter": "google_antigravity",
+    "risk_level": "red",
+    "risk_notice": "Experimental and undocumented. Provider behavior, account eligibility, and terms may change without notice. Use only with an account you are authorized to connect. Streaming is not currently available."
   },
   {
     "id": "gemini",
@@ -217,10 +249,11 @@
     "onboarding_fields": [
       "api_key",
       "project",
-      "location"
+      "location",
+      "vertex_request_type"
     ],
     "risk_level": "yellow",
-    "risk_notice": "Requires a Google Cloud project id. The API key must be bound to a service account with Agent Platform access, and model availability varies by location — 'global' carries the widest selection. A service account key may be uploaded instead of an API key; it is stored encrypted and exchanged for short-lived access tokens.",
+    "risk_notice": "Requires a Google Cloud project id. The API key must be bound to a service account with Agent Platform access, and model availability varies by location \u2014 'global' carries the widest selection. A service account key may be uploaded instead of an API key; it is stored encrypted and exchanged for short-lived access tokens.",
     "docs_url": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs"
   },
   {
@@ -520,7 +553,8 @@
     "supports_model_discovery": true,
     "anonymous_automation": true,
     "onboarding_fields": [
-      "base_url"
+      "base_url",
+      "api_key"
     ],
     "risk_level": "green",
     "docs_url": "https://opencode.ai/zen"

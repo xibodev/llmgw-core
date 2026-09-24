@@ -11,13 +11,13 @@ import (
 
 // AutoConnectResult represents the outcome of self-adjudicating an anonymous provider.
 type AutoConnectResult struct {
-	RegistryID  string   `json:"registry_id"`
-	ProviderID  string   `json:"provider_id"`
-	Status      string   `json:"status"` // "verified", "connected", "failed"
-	Models      []string `json:"models,omitempty"`
-	ProbeModel  string   `json:"probe_model,omitempty"`
-	LatencyMs   int64    `json:"latency_ms,omitempty"`
-	Error       string   `json:"error,omitempty"`
+	RegistryID string   `json:"registry_id"`
+	ProviderID string   `json:"provider_id"`
+	Status     string   `json:"status"` // "verified", "connected", "failed"
+	Models     []string `json:"models,omitempty"`
+	ProbeModel string   `json:"probe_model,omitempty"`
+	LatencyMs  int64    `json:"latency_ms,omitempty"`
+	Error      string   `json:"error,omitempty"`
 }
 
 // AutoConnectAnonymousProviders discovers models for all reviewed anonymous providers,

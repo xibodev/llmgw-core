@@ -188,8 +188,17 @@ func TestMockAutoConnectAnonymousProviders(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data": []map[string]any{
 					{
-						"id":     "ling-3.0-flash-fin-free",
-						"object": "model",
+						"id":           "kilo-auto/free",
+						"object":       "model",
+						"isFree":       true,
+						"pricing":      map[string]any{"prompt": "0", "completion": "0"},
+						"architecture": map[string]any{"output_modalities": []any{"text"}},
+					},
+					{
+						"id":           "paid/model",
+						"isFree":       false,
+						"pricing":      map[string]any{"prompt": "0.000001", "completion": "0.000002"},
+						"architecture": map[string]any{"output_modalities": []any{"text"}},
 					},
 				},
 			})
@@ -198,7 +207,7 @@ func TestMockAutoConnectAnonymousProviders(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id":     "chatcmpl-mock",
 				"object": "chat.completion",
-				"model":  "ling-3.0-flash-fin-free",
+				"model":  "kilo-auto/free",
 				"choices": []any{
 					map[string]any{
 						"index": 0,
@@ -218,24 +227,27 @@ func TestMockAutoConnectAnonymousProviders(t *testing.T) {
 
 	// Discover models directly with mock server
 	profile := providers.AnonymousProviderProfile{
-		RegistryID:         "opencode_zen",
-		ProviderID:         "mock-zen",
+		RegistryID:         "kilo_code",
+		ProviderID:         "mock-kilo",
 		RuntimeType:        "openai_compatible",
 		BaseURL:            server.URL,
-		VerificationModels: []string{"ling-3.0-flash-fin-free"},
+		VerificationModels: []string{"kilo-auto/free"},
 	}
 
 	models, err := providers.DiscoverAnonymousModels(context.Background(), profile, server.Client())
 	if err != nil {
 		t.Fatalf("unexpected discovery error: %v", err)
 	}
-	if len(models) != 1 || models[0].ID != "ling-3.0-flash-fin-free" {
+	if len(models) != 1 || models[0].ID != "kilo-auto/free" || models[0].OwnedBy != "mock-kilo" {
 		t.Fatalf("unexpected models: %+v", models)
+	}
+	if probe := providers.AnonymousVerificationModel(profile.RegistryID, models); probe != "kilo-auto/free" {
+		t.Fatalf("probe=%q", probe)
 	}
 
 	// Verify probe completion via OpenAIProvider
-	p := providers.NewOpenAIProvider("mock-zen", server.URL, "none", server.Client())
-	resp, err := p.Complete(context.Background(), "ling-3.0-flash-fin-free", map[string]any{
+	p := providers.NewOpenAIProvider("mock-kilo", server.URL, "none", server.Client())
+	resp, err := p.Complete(context.Background(), "kilo-auto/free", map[string]any{
 		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
 	}, nil)
 	if err != nil {

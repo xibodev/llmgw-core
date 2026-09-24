@@ -82,6 +82,18 @@ An override cannot change wire or safety facts. A product that needs different
 wire behavior adds its own entry instead. `Entries()` orders by priority, then
 by manifest order, so an overlay without priorities keeps the manifest order.
 
+Anonymous providers use one mechanism:
+
+- `Registry.AnonymousProfiles` lists the entries curated for anonymous
+  automation.
+- `AdmitAnonymousModel` applies each provider's reviewed free-model rules to a
+  raw catalog row. It fails closed: unknown providers are never admitted, and
+  OpenCode Zen is admitted only from its verified metadata.
+- `SelectVerificationModel` picks the model to probe.
+- `DiscoverAnonymousModels` combines them.
+
+Whether to enroll an anonymous provider remains the product's policy.
+
 ## License
 
 MIT

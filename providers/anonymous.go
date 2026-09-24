@@ -13,8 +13,11 @@ import (
 	"time"
 
 	core "github.com/xibodev/llmgw-core"
+	"github.com/xibodev/llmgw-core/providers/zen"
 )
 
+// AnonymousProviderProfile describes one provider curated for anonymous
+// automation. Whether a product enrolls it remains the product's policy.
 type AnonymousProviderProfile struct {
 	RegistryID         string   `json:"registry_id"`
 	ProviderID         string   `json:"provider_id"`
@@ -23,12 +26,23 @@ type AnonymousProviderProfile struct {
 	VerificationModels []string `json:"verification_models"`
 }
 
-var anonymousVerificationModels = map[string][]string{
-	"opencode_zen":     {"ling-3.0-flash-fin-free", "muse-spark-1.2-contributor-free", "nemotron-3.5-lightning-free"},
-	"kilo_code":        {"kilo-auto/free", "liquid/lfm-2.5-2.6b:free", "cohere/north-mini-code:free"},
-	"llm7":             {"codestral-latest", "mistral-Nemo-Instruct-2407", "minimax-m2.7"},
-	"ovh_ai_endpoints": {"Qwen3.8-27B", "Mistral-Nemo-Instruct-2407", "gpt-oss-20b"},
-	"pollinations":     {"openai-fast"},
+// anonymousVerificationDefaults returns the reviewed probe models for one
+// anonymous provider, most preferred first. It is a function rather than a
+// map variable so the package keeps no mutable state.
+func anonymousVerificationDefaults(registryID string) []string {
+	switch registryID {
+	case "opencode_zen":
+		return []string{"ling-3.0-flash-fin-free", "muse-spark-1.2-contributor-free", "nemotron-3.5-lightning-free"}
+	case "kilo_code":
+		return []string{"kilo-auto/free", "liquid/lfm-2.5-2.6b:free", "cohere/north-mini-code:free"}
+	case "llm7":
+		return []string{"codestral-latest", "mistral-Nemo-Instruct-2407", "minimax-m2.7"}
+	case "ovh_ai_endpoints":
+		return []string{"Qwen3.8-27B", "Mistral-Nemo-Instruct-2407", "gpt-oss-20b"}
+	case "pollinations":
+		return []string{"openai-fast"}
+	}
+	return nil
 }
 
 // AnonymousProviderProfiles returns the default registry's anonymous profiles.
@@ -47,20 +61,22 @@ func (r *Registry) AnonymousProfiles() []AnonymousProviderProfile {
 		profiles = append(profiles, AnonymousProviderProfile{
 			RegistryID: entry.ID, ProviderID: entry.DefaultProviderID,
 			RuntimeType: entry.RuntimeType, BaseURL: entry.DefaultBaseURL,
-			VerificationModels: append([]string(nil), anonymousVerificationModels[entry.ID]...),
+			VerificationModels: anonymousVerificationDefaults(entry.ID),
 		})
 	}
 	sort.Slice(profiles, func(i, j int) bool { return profiles[i].RegistryID < profiles[j].RegistryID })
 	return profiles
 }
 
-// AnonymousVerificationModel returns the best probe model for self-adjudication.
-func AnonymousVerificationModel(registryID string, models []core.ModelInfo) string {
-	free := map[string]string{}
-	for _, m := range models {
-		free[strings.ToLower(m.ID)] = m.ID
+// SelectVerificationModel returns the model to probe an anonymous provider
+// with: the first reviewed default among the free model ids, otherwise the
+// lexically first free id, otherwise "". Matching ignores case.
+func SelectVerificationModel(registryID string, freeModelIDs []string) string {
+	free := make(map[string]string, len(freeModelIDs))
+	for _, id := range freeModelIDs {
+		free[strings.ToLower(id)] = id
 	}
-	for _, preferred := range anonymousVerificationModels[registryID] {
+	for _, preferred := range anonymousVerificationDefaults(registryID) {
 		if model := free[strings.ToLower(preferred)]; model != "" {
 			return model
 		}
@@ -76,11 +92,80 @@ func AnonymousVerificationModel(registryID string, models []core.ModelInfo) stri
 	return ""
 }
 
-// DiscoverAnonymousModels queries an anonymous provider's catalog endpoint and returns
-// normalized, filtered free models.
+// AnonymousVerificationModel returns the probe model among discovered free
+// models; see SelectVerificationModel.
+func AnonymousVerificationModel(registryID string, models []core.ModelInfo) string {
+	ids := make([]string, 0, len(models))
+	for _, model := range models {
+		ids = append(ids, model.ID)
+	}
+	return SelectVerificationModel(registryID, ids)
+}
+
+// AnonymousAdmission is the verdict on one raw catalog row of an anonymous
+// provider.
+type AnonymousAdmission struct {
+	// Free reports a free model that is usable without credentials.
+	Free bool
+	// ContextWindow is the declared context length, or 0.
+	ContextWindow int
+	// Reasoning and ToolCalls report capabilities the row declares.
+	Reasoning bool
+	ToolCalls bool
+}
+
+// AdmitAnonymousModel applies the reviewed free-model rules to one raw row of
+// an anonymous provider's catalog. Admission fails closed: an unknown
+// provider is never admitted, and neither is OpenCode Zen, whose admission
+// needs its verified metadata rather than a raw row (see package zen).
+func AdmitAnonymousModel(registryID string, row map[string]any) AnonymousAdmission {
+	switch registryID {
+	case "kilo_code":
+		isFree, _ := row["isFree"].(bool)
+		pricing, _ := row["pricing"].(map[string]any)
+		architecture, _ := row["architecture"].(map[string]any)
+		return AnonymousAdmission{
+			Free: isFree && zeroPrice(pricing["prompt"]) && zeroPrice(pricing["completion"]) &&
+				listContains(architecture["output_modalities"], "text"),
+			ContextWindow: rowInt(row["context_length"]),
+		}
+	case "llm7":
+		tier, _ := row["tier"].(string)
+		modelType, _ := row["model_type"].(string)
+		usageBasedOnly, usageKnown := row["usage_based_only"].(bool)
+		return AnonymousAdmission{
+			Free: strings.EqualFold(tier, "turbo") && strings.EqualFold(modelType, "chat") &&
+				listContains(row["schema_endpoints"], "openai") && usageKnown && !usageBasedOnly,
+			ContextWindow: rowInt(row["context_length"]),
+		}
+	case "ovh_ai_endpoints":
+		pricing, _ := row["pricing"].(map[string]any)
+		return AnonymousAdmission{
+			Free: rowInt(row["context_length"]) > 0 && rowInt(row["max_completion_tokens"]) > 0 &&
+				zeroPrice(pricing["prompt"]) && zeroPrice(pricing["completion"]),
+			ContextWindow: rowInt(row["context_length"]),
+		}
+	case "pollinations":
+		tier, _ := row["tier"].(string)
+		reasoning, _ := row["reasoning"].(bool)
+		tools, _ := row["tools"].(bool)
+		return AnonymousAdmission{
+			Free:      strings.EqualFold(tier, "anonymous") && listContains(row["output_modalities"], "text"),
+			Reasoning: reasoning, ToolCalls: tools,
+		}
+	}
+	return AnonymousAdmission{}
+}
+
+// DiscoverAnonymousModels queries an anonymous provider's catalog and returns
+// only the models AdmitAnonymousModel admits. OpenCode Zen is discovered with
+// its verified metadata instead.
 func DiscoverAnonymousModels(ctx context.Context, profile AnonymousProviderProfile, client *http.Client) ([]core.ModelInfo, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	if profile.RegistryID == "opencode_zen" {
+		return discoverAnonymousZenModels(ctx, profile, client)
 	}
 	reqURL := strings.TrimRight(profile.BaseURL, "/") + "/models"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
@@ -96,7 +181,7 @@ func DiscoverAnonymousModels(ctx context.Context, profile AnonymousProviderProfi
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 		return nil, fmt.Errorf("discovery status %d: %s", resp.StatusCode, string(b))
 	}
 
@@ -105,103 +190,92 @@ func DiscoverAnonymousModels(ctx context.Context, profile AnonymousProviderProfi
 		return nil, fmt.Errorf("read discovery response: %w", err)
 	}
 
-	if profile.RegistryID == "pollinations" {
-		return parsePollinationsCatalog(bodyBytes, profile.ProviderID)
-	}
-
+	var rows []map[string]any
 	var envelope struct {
 		Data []map[string]any `json:"data"`
 	}
 	if err := json.Unmarshal(bodyBytes, &envelope); err == nil && len(envelope.Data) > 0 {
-		return filterAnonymousCatalogRows(envelope.Data, profile.RegistryID, profile.ProviderID), nil
+		rows = envelope.Data
+	} else if err := json.Unmarshal(bodyBytes, &rows); err != nil || len(rows) == 0 {
+		return nil, fmt.Errorf("unrecognized model envelope format from %s", profile.BaseURL)
 	}
-
-	var listEnvelope []map[string]any
-	if err := json.Unmarshal(bodyBytes, &listEnvelope); err == nil && len(listEnvelope) > 0 {
-		return filterAnonymousCatalogRows(listEnvelope, profile.RegistryID, profile.ProviderID), nil
-	}
-
-	return nil, fmt.Errorf("unrecognized model envelope format from %s", profile.BaseURL)
+	return admittedAnonymousModels(rows, profile), nil
 }
 
-func parsePollinationsCatalog(data []byte, providerID string) ([]core.ModelInfo, error) {
-	var items []map[string]any
-	if err := json.Unmarshal(data, &items); err != nil {
-		return nil, fmt.Errorf("unmarshal pollinations catalog: %w", err)
-	}
-	rows := []core.ModelInfo{}
-	for _, item := range items {
-		name, ok := item["name"].(string)
-		if !ok || name == "" {
-			continue
-		}
-		tier, _ := item["tier"].(string)
-		if !strings.EqualFold(tier, "anonymous") {
-			continue
-		}
-		desc, _ := item["description"].(string)
-		rows = append(rows, core.ModelInfo{
-			ID:          name,
-			Object:      "model",
-			OwnedBy:     providerID,
-			Description: desc,
-		})
-	}
-	return rows, nil
-}
-
-func filterAnonymousCatalogRows(items []map[string]any, registryID, providerID string) []core.ModelInfo {
+func admittedAnonymousModels(rows []map[string]any, profile AnonymousProviderProfile) []core.ModelInfo {
 	out := []core.ModelInfo{}
-	for _, raw := range items {
-		id, _ := raw["id"].(string)
+	for _, row := range rows {
+		id, _ := row["id"].(string)
 		if id == "" {
-			id, _ = raw["name"].(string)
+			id, _ = row["name"].(string)
 		}
-		if id == "" {
+		if strings.TrimSpace(id) == "" || !AdmitAnonymousModel(profile.RegistryID, row).Free {
 			continue
 		}
-
-		include := false
-		switch registryID {
-		case "kilo_code":
-			include, _ = raw["isFree"].(bool)
-			if pricing, ok := raw["pricing"].(map[string]any); ok {
-				include = include && isZeroPrice(pricing["prompt"]) && isZeroPrice(pricing["completion"])
-			}
-		case "llm7":
-			tier, _ := raw["tier"].(string)
-			modelType, _ := raw["model_type"].(string)
-			usageBasedOnly, _ := raw["usage_based_only"].(bool)
-			include = strings.EqualFold(tier, "turbo") && strings.EqualFold(modelType, "chat") && !usageBasedOnly
-		case "ovh_ai_endpoints":
-			if pricing, ok := raw["pricing"].(map[string]any); ok {
-				include = isZeroPrice(pricing["prompt"]) && isZeroPrice(pricing["completion"])
-			}
-		case "opencode_zen":
-			include = true
-		default:
-			include = true
-		}
-
-		if include {
-			out = append(out, core.ModelInfo{
-				ID:      id,
-				Object:  "model",
-				OwnedBy: providerID,
-			})
-		}
+		description, _ := row["description"].(string)
+		out = append(out, core.ModelInfo{ID: id, Object: "model", OwnedBy: profile.ProviderID, Description: description})
 	}
 	return out
 }
 
-func isZeroPrice(val any) bool {
-	switch v := val.(type) {
+func discoverAnonymousZenModels(ctx context.Context, profile AnonymousProviderProfile, client *http.Client) ([]core.ModelInfo, error) {
+	zenClient, err := zen.New(zen.Config{
+		ProviderID: profile.ProviderID,
+		Endpoints:  zen.Endpoints{BaseURL: profile.BaseURL},
+		HTTPClient: client,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure OpenCode Zen discovery: %w", err)
+	}
+	evidence, err := zenClient.DiscoverVerified(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("discover OpenCode Zen models: %w", err)
+	}
+	out := make([]core.ModelInfo, 0, len(evidence.Models))
+	for _, model := range evidence.Models {
+		model.OwnedBy = profile.ProviderID
+		out = append(out, model)
+	}
+	return out, nil
+}
+
+func zeroPrice(value any) bool {
+	switch typed := value.(type) {
 	case string:
-		num, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		return err == nil && num == 0 && !math.IsNaN(num) && !math.IsInf(num, 0)
+		number, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		return err == nil && number == 0 && !math.IsNaN(number) && !math.IsInf(number, 0)
 	case float64:
-		return v == 0 && !math.IsNaN(v) && !math.IsInf(v, 0)
+		return typed == 0 && !math.IsNaN(typed) && !math.IsInf(typed, 0)
 	default:
 		return false
 	}
+}
+
+func listContains(value any, wanted string) bool {
+	items, _ := value.([]any)
+	for _, item := range items {
+		if text, ok := item.(string); ok && strings.EqualFold(text, wanted) {
+			return true
+		}
+	}
+	return false
+}
+
+func rowInt(value any) int {
+	switch typed := value.(type) {
+	case float64:
+		return int(typed)
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case json.Number:
+		if number, err := typed.Int64(); err == nil {
+			return int(number)
+		}
+		if number, err := typed.Float64(); err == nil {
+			return int(number)
+		}
+	}
+	return 0
 }

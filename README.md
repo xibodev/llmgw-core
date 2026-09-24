@@ -170,6 +170,43 @@ Request losses are checked against the `LossPolicy` before the provider is
 called. All losses, including the provider's own, are returned in
 `Response.Losses` or through the stream's `LossReporter`.
 
+## Execution
+
+`execution` holds the primitives failover is built from. Endpoints, policy
+gates, translation-loss routing and affinity stay product code: a product
+orders its candidates and hands the list over.
+
+- **`HealthTracker`** keeps each key's circuit and cooldown behind a mutex,
+  with an injectable clock. Consecutive circuit failures open the circuit at
+  `FailureThreshold`, for `OpenDuration` or what a `Backoff` returns. After
+  that it is half-open: the next failure reopens it and a success closes it.
+  A Retry-After keeps the key unavailable until then. Policies can differ per
+  key. `Observe`, the default reading of an error, uses `core.ClassifyError`,
+  and a product can replace it.
+- **`Execute`** tries candidates in order. It skips unavailable ones, stops at
+  a terminal disposition, and moves on after a failover or retryable one,
+  repeating the candidate first only when `Retry` asks. It records outcomes
+  and returns the result with a trace of every candidate reached. A canceled
+  context stops it and records nothing.
+- **`ExecuteStream`** commits to a candidate once a frame carries output,
+  content or reasoning, as the product's predicate decides. Earlier frames are
+  held back, so a failure before output moves to the next candidate unseen.
+  After output nothing fails over: a failure reaches the caller as the
+  stream's `*AfterOutputError`.
+
+```go
+tracker := execution.NewHealthTracker(execution.HealthOptions{})
+executor := execution.Executor[core.Target]{
+    Health: tracker,
+    Key:    func(target core.Target) string { return target.Provider },
+}
+result, err := execution.ExecuteStream(ctx, executor, targets, open, carriesOutput)
+if err != nil {
+    return err // result.Attempts still holds the trace
+}
+defer result.Value.Close()
+```
+
 ## License
 
 MIT

@@ -66,9 +66,9 @@ func (cb *CircuitBreaker) RecordFailure(provider string) {
 
 // Router resolves requested model strings into ordered targets.
 type Router struct {
-	routes   map[string]core.RouteConfig
-	cb       *CircuitBreaker
-	policy   core.PolicyGate
+	routes map[string]core.RouteConfig
+	cb     *CircuitBreaker
+	policy core.PolicyGate
 }
 
 func NewRouter(routes map[string]core.RouteConfig, policy core.PolicyGate) *Router {

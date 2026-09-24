@@ -24,9 +24,9 @@ type RouteConfig struct {
 
 // Config configures the core LLM Gateway engine.
 type Config struct {
-	Providers   map[string]ProviderConfig `json:"providers"`
-	Routes      map[string]RouteConfig    `json:"routes"`
-	DefaultRoute string                   `json:"default_route,omitempty"`
+	Providers    map[string]ProviderConfig `json:"providers"`
+	Routes       map[string]RouteConfig    `json:"routes"`
+	DefaultRoute string                    `json:"default_route,omitempty"`
 
 	// Pluggable extension hooks
 	Authenticator      Authenticator

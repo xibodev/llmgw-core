@@ -50,6 +50,8 @@ const (
 	OutcomeComplete Outcome = "complete"
 	// OutcomeFailed means the flow ended without a credential.
 	OutcomeFailed Outcome = "failed"
+	// OutcomeExpired means the provider expired the flow first.
+	OutcomeExpired Outcome = "expired"
 )
 
 // Flow is one authorization attempt.

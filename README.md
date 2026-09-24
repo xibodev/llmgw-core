@@ -94,6 +94,27 @@ Anonymous providers use one mechanism:
 
 Whether to enroll an anonymous provider remains the product's policy.
 
+## Provider contract
+
+The wire-level contract shared by products and transports:
+
+- **`Caller`** identifies who a request acts for. `LocalCaller()` is the caller
+  of a single-user application.
+- **`Provider`** serves a `Request{Surface, Model, Body, ContentType,
+  Credential}` for the surfaces it lists in `NativeSurfaces`.
+  - It returns a `Response{Body, ContentType, Losses}`, or a `StreamIter` of
+    complete SSE frames.
+  - Bodies are bytes: JSON for the chat surfaces, multipart form data for
+    speech-to-text, and binary for speech, images and video.
+  - A request for any other surface fails with a `*SurfaceError`, and a
+    translation adapter serves it instead.
+- **Errors** classify themselves. `ClassifyError(err).Disposition()` says whether
+  to retry, fail over, or stop. `ProviderError` carries a message that is safe to
+  show and a cause that is never rendered.
+- **`LossPolicy`** decides which translation and adaptation losses a product
+  accepts, by field-path glob, class and severity. Allowed losses are still
+  reported, in `Response.Losses` and through a stream's `LossReporter`.
+
 ## License
 
 MIT

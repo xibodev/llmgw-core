@@ -8,6 +8,9 @@ import (
 )
 
 // Principal represents the authenticated caller making a request.
+//
+// Deprecated: new APIs take Caller, and Principal.Caller converts. Principal
+// and the Engine hooks that use it move to Caller in the next minor release.
 type Principal struct {
 	ID        string         `json:"id"`
 	Type      string         `json:"type"` // "user", "api_key", "anonymous", "service"
@@ -45,12 +48,15 @@ type StreamIter interface {
 }
 
 // ProviderErrorClassification is the provider-independent routing metadata for
-// an operation failure. StatusCode is zero when no HTTP response was received.
+// an operation failure. StatusCode is zero when no HTTP response was received,
+// and RetryAfter is zero when the provider gave no delay. Disposition
+// summarizes what the failure permits.
 type ProviderErrorClassification struct {
 	StatusCode       int
 	Retryable        bool
 	FailoverEligible bool
 	CircuitFailure   bool
+	RetryAfter       time.Duration
 }
 
 // ProviderErrorClassifier exposes routing metadata without requiring callers

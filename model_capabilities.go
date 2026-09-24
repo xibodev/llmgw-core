@@ -83,7 +83,28 @@ const (
 	ModelSurfaceChatCompletions ModelSurface = "chat_completions"
 	ModelSurfaceResponses       ModelSurface = "responses"
 	ModelSurfaceMessages        ModelSurface = "messages"
+
+	// Non-chat surfaces. Their request and response bodies are not always
+	// JSON: speech-to-text uploads multipart form data, and speech, image and
+	// video responses are binary. The capabilities schema reports no
+	// compatibility for them yet.
+	ModelSurfaceEmbeddings          ModelSurface = "embeddings"
+	ModelSurfaceAudioTranscriptions ModelSurface = "audio_transcriptions"
+	ModelSurfaceAudioSpeech         ModelSurface = "audio_speech"
+	ModelSurfaceImages              ModelSurface = "images"
+	ModelSurfaceVideos              ModelSurface = "videos"
 )
+
+// KnownModelSurface reports whether a surface is defined by this version.
+func KnownModelSurface(surface ModelSurface) bool {
+	switch surface {
+	case ModelSurfaceChatCompletions, ModelSurfaceResponses, ModelSurfaceMessages,
+		ModelSurfaceEmbeddings, ModelSurfaceAudioTranscriptions, ModelSurfaceAudioSpeech,
+		ModelSurfaceImages, ModelSurfaceVideos:
+		return true
+	}
+	return false
+}
 
 type ModelOperationCapabilities struct {
 	Chat       Support `json:"chat"`

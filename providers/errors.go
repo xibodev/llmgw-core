@@ -52,6 +52,7 @@ func (e *InvocationError) ProviderErrorClassification() core.ProviderErrorClassi
 		Retryable:        retryable,
 		FailoverEligible: failoverEligible,
 		CircuitFailure:   circuitFailure,
+		RetryAfter:       e.RetryAfter,
 	}
 }
 

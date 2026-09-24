@@ -53,6 +53,35 @@ func main() {
 }
 ```
 
+## Provider registry
+
+`providers.DefaultRegistry()` is the reviewed, validated manifest of curated
+provider integrations. Core owns each entry's wire and safety facts: runtime,
+protocol, auth methods, connection scope, risk classification, and anonymous
+automation. A product layers its own curation on top with an overlay, and the
+result is validated like a manifest:
+
+```go
+overlay, err := providers.DecodeOverlay(overlayJSON) // strict: unknown fields fail
+registry, err := providers.DefaultRegistry().WithOverlay(overlay, providers.ValidationOptions{
+    RuntimeTypes: []string{"openai_compatible", "anthropic"}, // what this product can execute
+})
+entry, ok := registry.Lookup("gpt") // ids and aliases, case-insensitive
+```
+
+An overlay can:
+
+- **Override** presentation, priority, and curation fields of existing entries:
+  label, description, categories, icon, domain, docs URL, priority,
+  availability, common models, onboarding fields, additional aliases, and
+  product-private `extensions`.
+- **Add** product-only entries under their own ids.
+- **Remove** entries the product does not offer.
+
+An override cannot change wire or safety facts. A product that needs different
+wire behavior adds its own entry instead. `Entries()` orders by priority, then
+by manifest order, so an overlay without priorities keeps the manifest order.
+
 ## License
 
 MIT

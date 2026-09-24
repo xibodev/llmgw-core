@@ -31,10 +31,16 @@ var anonymousVerificationModels = map[string][]string{
 	"pollinations":     {"openai-fast"},
 }
 
-// AnonymousProviderProfiles returns all curated providers configured for anonymous automation.
+// AnonymousProviderProfiles returns the default registry's anonymous profiles.
 func AnonymousProviderProfiles() []AnonymousProviderProfile {
+	return DefaultRegistry().AnonymousProfiles()
+}
+
+// AnonymousProfiles returns a profile for every entry curated for anonymous
+// automation, sorted by registry id.
+func (r *Registry) AnonymousProfiles() []AnonymousProviderProfile {
 	profiles := []AnonymousProviderProfile{}
-	for _, entry := range ProviderRegistry() {
+	for _, entry := range r.entries {
 		if !entry.AnonymousAutomation {
 			continue
 		}

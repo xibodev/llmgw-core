@@ -92,11 +92,11 @@ func TestMemoryCatalogStoreNormalizesKeysAndHonoursCancellation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store := core.NewMemoryCatalogStore()
-	revision, err := store.Save(ctx, core.CatalogKey{Instance: " provider ", CallerID: " user-1 "}, core.CatalogEvidence{Status: core.CatalogEmpty})
+	revision, err := store.Save(ctx, core.CatalogKey{Instance: " provider ", CredentialKey: " user-1-credential "}, core.CatalogEvidence{Status: core.CatalogEmpty})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record, err := store.Load(ctx, core.CatalogKey{Instance: "provider", CallerID: "user-1"}); err != nil || record.Revision != revision {
+	if record, err := store.Load(ctx, core.CatalogKey{Instance: "provider", CredentialKey: "user-1-credential"}); err != nil || record.Revision != revision {
 		t.Fatalf("normalized key: record=%+v err=%v", record, err)
 	}
 	canceled, cancel := context.WithCancel(ctx)

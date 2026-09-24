@@ -11,13 +11,14 @@ import (
 // ErrCatalogNotFound reports that no catalog is stored for a key.
 var ErrCatalogNotFound = errors.New("core: catalog not found")
 
-// CatalogKey identifies one stored catalog: a provider instance and, for a
-// catalog that differs per caller, such as one discovered with a personal
-// credential, the caller's ID. An empty CallerID is the catalog every caller
-// shares.
+// CatalogKey identifies one stored catalog: a provider instance and the key of
+// the credential that discovered it. A catalog depends on the credential, not
+// on the caller: callers sharing a system credential share its catalog, while
+// a personal subscription gets its own. An empty CredentialKey is the catalog
+// of a provider discovered without a credential.
 type CatalogKey struct {
-	Instance string
-	CallerID string
+	Instance      string
+	CredentialKey string
 }
 
 // CatalogRecord is a stored catalog and its revision. The revision is opaque
@@ -63,7 +64,7 @@ func NewMemoryCatalogStore() *MemoryCatalogStore {
 }
 
 func normalizeCatalogKey(key CatalogKey) CatalogKey {
-	return CatalogKey{Instance: strings.TrimSpace(key.Instance), CallerID: strings.TrimSpace(key.CallerID)}
+	return CatalogKey{Instance: strings.TrimSpace(key.Instance), CredentialKey: strings.TrimSpace(key.CredentialKey)}
 }
 
 // Load implements CatalogStore.

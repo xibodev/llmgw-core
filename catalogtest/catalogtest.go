@@ -67,7 +67,7 @@ func Run(t *testing.T, newBackend NewBackend) {
 
 	t.Run("keys are independent", func(t *testing.T) {
 		store := newBackend(t)(t)
-		personal := core.CatalogKey{Instance: key.Instance, CallerID: "user-1"}
+		personal := core.CatalogKey{Instance: key.Instance, CredentialKey: "user-1-credential"}
 		if _, err := store.Save(ctx, key, evidence("shared", 2)); err != nil {
 			t.Fatal(err)
 		}

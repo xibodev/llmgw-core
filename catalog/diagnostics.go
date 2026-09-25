@@ -50,6 +50,13 @@ type Diagnostics struct {
 	FromCache bool `json:"from_cache"`
 }
 
+// Failed returns the read of a catalog that could not be read at all, such
+// as one whose provider cannot be built or whose credential is unavailable.
+func Failed(err error) Read {
+	code, detail, status := failure(err)
+	return Read{Err: err, Diagnostics: Diagnostics{Status: StatusError, FailureCode: code, Detail: detail, UpstreamStatus: status}}
+}
+
 // failure reduces err to what diagnostics may show.
 func failure(err error) (code, detail string, status int) {
 	if errors.Is(err, ErrStateChanged) {

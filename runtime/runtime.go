@@ -21,6 +21,7 @@ import (
 	"github.com/xibodev/llm-provider-auth/tokenstore"
 
 	core "github.com/xibodev/llmgw-core"
+	"github.com/xibodev/llmgw-core/catalog"
 	"github.com/xibodev/llmgw-core/providers"
 )
 
@@ -95,6 +96,9 @@ type Options[S any] struct {
 	// CatalogTTL bounds how long a stored catalog is served. Zero uses
 	// DefaultCatalogTTL.
 	CatalogTTL time.Duration
+	// CatalogService keeps catalogs instead, with its own store and TTLs,
+	// and may keep stale rows. Catalogs and CatalogTTL are then unused.
+	CatalogService *catalog.Service
 	// Now returns the current time. Nil uses time.Now.
 	Now func() time.Time
 }
@@ -112,7 +116,7 @@ type Runtime[S any] struct {
 	providers         map[string]core.Provider
 	coordinators      map[string]*tokenstore.Coordinator
 	health            map[string]core.ProviderHealthEvidence
-	discovery         map[core.CatalogKey]*sync.Mutex
+	catalogs          *catalog.Service
 }
 
 var errRefreshUnavailable = errors.New("runtime: this instance has no credential refresh")
@@ -137,12 +141,16 @@ func New[S any](options Options[S]) (*Runtime[S], error) {
 	if options.Now == nil {
 		options.Now = time.Now
 	}
+	catalogs := options.CatalogService
+	if catalogs == nil {
+		catalogs = catalog.New(catalog.Options{Store: options.Catalogs, TTL: options.CatalogTTL, Now: options.Now})
+	}
 	return &Runtime[S]{
 		options:      options,
 		providers:    map[string]core.Provider{},
 		coordinators: map[string]*tokenstore.Coordinator{},
 		health:       map[string]core.ProviderHealthEvidence{},
-		discovery:    map[core.CatalogKey]*sync.Mutex{},
+		catalogs:     catalogs,
 	}, nil
 }
 
@@ -336,74 +344,10 @@ func (r *Runtime[S]) Stream(ctx context.Context, caller core.Caller, instance st
 // last settings change, and not a failure. Another process's discovery counts,
 // because catalogs are shared through the CatalogStore and keyed by the
 // credential that discovered them. Discoveries of one catalog are serialized
-// within this Runtime.
+// within this Runtime, and fenced against invalidation (see ReadCatalog).
 func (r *Runtime[S]) ListModels(ctx context.Context, caller core.Caller, instance string) (core.CatalogRecord, error) {
-	b, err := r.bind(instance)
-	if err != nil {
-		return core.CatalogRecord{}, err
-	}
-	c, err := r.credential(ctx, caller, instance, b)
-	if err != nil {
-		r.observe(ctx, caller, instance, c, core.EvidenceOperationListModels, "", "", err)
-		return core.CatalogRecord{}, err
-	}
-	key := core.CatalogKey{Instance: instance, CredentialKey: c.key}
-	unlock := r.lockDiscovery(key)
-	defer unlock()
-	record, err := r.options.Catalogs.Load(ctx, key)
-	if err == nil && r.fresh(record) {
-		return record, nil
-	}
-	if err != nil && !errors.Is(err, core.ErrCatalogNotFound) {
-		return core.CatalogRecord{}, err
-	}
-	models, err := b.provider.ListModels(ctx, c.value)
-	if rejectedCredential(err, c) {
-		if next, ok := refreshed(ctx, b, c); ok {
-			c = next
-			models, err = b.provider.ListModels(ctx, c.value)
-		}
-	}
-	r.observe(ctx, caller, instance, c, core.EvidenceOperationListModels, "", "", err)
-	if err != nil {
-		return core.CatalogRecord{}, err
-	}
-	status := core.CatalogDiscovered
-	if len(models) == 0 {
-		status = core.CatalogEmpty
-	}
-	evidence := core.CatalogEvidence{Status: status, Models: models, ObservedAt: r.options.Now()}
-	revision, err := r.options.Catalogs.Save(ctx, key, evidence)
-	if err != nil {
-		return core.CatalogRecord{}, err
-	}
-	return core.CatalogRecord{Evidence: evidence, Revision: revision}, nil
-}
-
-func (r *Runtime[S]) fresh(record core.CatalogRecord) bool {
-	r.mu.Lock()
-	changedAt := r.settingsChangedAt
-	r.mu.Unlock()
-	observed := record.Evidence.ObservedAt
-	if record.Evidence.Status == core.CatalogFailed || observed.IsZero() {
-		return false
-	}
-	if !changedAt.IsZero() && observed.Before(changedAt) {
-		return false
-	}
-	return r.options.Now().Sub(observed) < r.options.CatalogTTL
-}
-
-func (r *Runtime[S]) lockDiscovery(key core.CatalogKey) func() {
-	r.mu.Lock()
-	lock, ok := r.discovery[key]
-	if !ok {
-		lock = &sync.Mutex{}
-		r.discovery[key] = lock
-	}
-	r.mu.Unlock()
-	lock.Lock()
-	return lock.Unlock
+	read := r.ReadCatalog(ctx, caller, instance)
+	return read.Record, read.Err
 }
 
 // observe records account evidence for an operation and updates the

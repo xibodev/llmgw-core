@@ -1,0 +1,35 @@
+# Responses stream translated to a Chat-only model
+request: POST /v1/responses
+status: 200
+header Cache-Control: no-cache
+header Connection: keep-alive
+header Content-Type: text/event-stream
+upstream: POST /f/chat/completions
+upstream body: {"messages":[{"content":"Say hello","role":"user"}],"model":"chat-model","stream":true,"stream_options":{"include_usage":true}}
+body:
+event: response.created
+data: {"response":{"background":false,"created_at":"<time>","error":null,"id":"<generated resp_>","incomplete_details":null,"instructions":null,"max_output_tokens":null,"max_tool_calls":null,"metadata":{},"model":"chat-model","object":"response","output":[],"parallel_tool_calls":true,"previous_response_id":null,"reasoning":{"effort":null,"summary":null},"service_tier":"default","status":"in_progress","store":false,"temperature":null,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_logprobs":0,"top_p":null,"truncation":"disabled","usage":null,"user":null},"sequence_number":0,"type":"response.created"}
+
+event: response.output_item.added
+data: {"item":{"content":[],"id":"<generated msg_>","role":"assistant","status":"in_progress","type":"message"},"output_index":0,"response_id":"<generated resp_>","sequence_number":1,"type":"response.output_item.added"}
+
+event: response.content_part.added
+data: {"content_index":0,"item_id":"<generated msg_>","output_index":0,"part":{"annotations":[],"text":"","type":"output_text"},"response_id":"<generated resp_>","sequence_number":2,"type":"response.content_part.added"}
+
+event: response.output_text.delta
+data: {"content_index":0,"delta":"Hello","item_id":"<generated msg_>","logprobs":[],"output_index":0,"response_id":"<generated resp_>","sequence_number":3,"type":"response.output_text.delta"}
+
+event: response.output_text.delta
+data: {"content_index":0,"delta":" from chat","item_id":"<generated msg_>","logprobs":[],"output_index":0,"response_id":"<generated resp_>","sequence_number":4,"type":"response.output_text.delta"}
+
+event: response.output_text.done
+data: {"content_index":0,"item_id":"<generated msg_>","logprobs":[],"output_index":0,"response_id":"<generated resp_>","sequence_number":5,"text":"Hello from chat","type":"response.output_text.done"}
+
+event: response.content_part.done
+data: {"content_index":0,"item_id":"<generated msg_>","output_index":0,"part":{"annotations":[],"text":"Hello from chat","type":"output_text"},"response_id":"<generated resp_>","sequence_number":6,"type":"response.content_part.done"}
+
+event: response.output_item.done
+data: {"item":{"content":[{"annotations":[],"text":"Hello from chat","type":"output_text"}],"id":"<generated msg_>","role":"assistant","status":"completed","type":"message"},"output_index":0,"response_id":"<generated resp_>","sequence_number":7,"type":"response.output_item.done"}
+
+event: response.completed
+data: {"response":{"background":false,"created_at":"<time>","error":null,"id":"<generated resp_>","incomplete_details":null,"instructions":null,"max_output_tokens":null,"max_tool_calls":null,"metadata":{},"model":"chat-model","object":"response","output":[{"content":[{"annotations":[],"text":"Hello from chat","type":"output_text"}],"id":"<generated msg_>","role":"assistant","status":"completed","type":"message"}],"output_text":"Hello from chat","parallel_tool_calls":true,"previous_response_id":null,"reasoning":{"effort":null,"summary":null},"service_tier":"default","status":"completed","store":false,"temperature":null,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_logprobs":0,"top_p":null,"truncation":"disabled","usage":{"input_tokens":3,"input_tokens_details":{"cached_tokens":0},"output_tokens":4,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":7},"user":null},"sequence_number":8,"type":"response.completed"}

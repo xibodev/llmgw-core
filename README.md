@@ -547,6 +547,57 @@ Providers: func(s Settings, instance string) (core.Provider, error) {
   cause, so `errors.Is(err, copilot.ErrOAuthTokenRejected)` lets a product
   add guidance that names its own sign-in.
 
+## OpenAI-compatible and Bedrock
+
+`providers.OpenAICompatible` is the gateway's generic OpenAI transport:
+its openai_compatible, openai and litellm instances, the anonymous
+catalogs the registry curates, and Amazon Bedrock. Requests are shaped
+byte for byte as the gateway shapes them.
+
+```go
+provider, err := providers.NewOpenAICompatible(providers.OpenAICompatibleConfig{
+    BaseURL:    s.BaseURL,     // required, such as https://api.openai.com/v1
+    RegistryID: s.RegistryID,  // "openai", "llm7", "pollinations", ...
+    Models:     catalog.Lookup, // the product's catalog row for a model
+})
+// Or: providers.NewBedrock(s.Region, s.BaseURL, providers.OpenAICompatibleConfig{Models: catalog.Lookup})
+if err != nil {
+    return nil, err
+}
+return translation.Adapter{Provider: provider}, nil // Messages over Chat
+```
+
+- **Credential.** Optional. The API key, or else the token, is the
+  bearer, without any `Bearer ` prefix; no key, `free` or `none` sends no
+  Authorization. The credential's headers are sent too. A service-account
+  or setup-token credential is refused before anything is sent.
+- **Surfaces.** Chat Completions for every model, and Responses for a
+  model whose row lists it or of the `openai` entry. Both are declared
+  through `core.WirePreserver`, so a product labels them native. The
+  Adapter serves Responses over Chat for the other models, but does not
+  stream it.
+- **Requests.** Chat carries the fields the gateway's transport forwards,
+  and drops the others as advisory losses unless `ForwardAllFields` is
+  set. Responses is forwarded as sent, with the request's model and
+  stream flag. `ForceAPISupport`, or a request's `force_api_support`,
+  serves Chat over Responses for a model whose row lists only Responses,
+  retrying a 400 that names `temperature` or `top_p` once without it,
+  and sends `max_tokens` to a reasoning model as `max_completion_tokens`.
+- **Catalog.** `/models` rows keep their vendor, display name and
+  endpoints; a capabilities block is distilled into `LegacyCapabilities`,
+  and `Capabilities` is what `core.InferCapabilities` derives. Without a
+  key, kilo_code, llm7, ovh_ai_endpoints and pollinations list only the
+  models `AdmitAnonymousModel` admits, marked `Free`. Pollinations takes
+  Chat at `/v1/chat/completions` and lists a bare JSON array.
+- **Bedrock.** `NewBedrock(region, baseURL, config)` sends a Bedrock API
+  key as a bearer to the base URL, or to the region's bedrock-runtime
+  endpoint, us-east-1 by default. Nothing is signed, and a malformed
+  region is refused.
+- **Errors** are `*core.ProviderError`, classified by the gateway's status
+  set with `Retry-After`. A native Responses 404 or 405 is a
+  `*core.SurfaceError`, and a catalog failure's `*providers.CatalogError`
+  has a `CatalogCode*` code.
+
 ## Execution
 
 `execution` holds the primitives failover is built from. Endpoints, policy

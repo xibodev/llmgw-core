@@ -1,0 +1,17 @@
+# First member fails after output; no failover
+request: POST /v1/chat/completions
+status: 200
+header Cache-Control: no-cache
+header Connection: keep-alive
+header Content-Type: text/event-stream
+header X-Llmgw-Prompt-Bytes: 39
+header X-Llmgw-Tool-Schema-Bytes: 0
+header X-Llmgw-Ttfb-Ms: <ms>
+upstream: POST /a/chat/completions
+upstream body: {"messages":[{"content":"Say hello","role":"user"}],"model":"model-a","stream":true}
+body:
+data: {"choices":[{"delta":{"content":"Partial","role":"assistant"},"finish_reason":null,"index":0}],"created":"<time>","id":"chatcmpl_fixture","model":"model-a","object":"chat.completion.chunk"}
+
+data: {"error":{"code":"provider_invocation_failed","message":"Upstream provider request failed.","type":"provider_error"}}
+
+data: [DONE]

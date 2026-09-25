@@ -246,7 +246,7 @@ rt, err := runtime.New(runtime.Options[Settings]{
         if err != nil {
             return nil, err
         }
-        return translation.Adapter{Provider: codex}, nil // Chat over Responses
+        return translation.Adapter{Provider: codex}, nil // Messages over Chat
     },
     Refresh: func(s Settings, instance string) tokenstore.RefreshFunc {
         return providers.NewCodexRefresh(codexauth.Config{ClientID: s.CodexClientID})
@@ -259,8 +259,13 @@ rt, err := runtime.New(runtime.Options[Settings]{
   token is the bearer and `AccountID` becomes the `ChatGPT-Account-ID`
   header. A credential without a token, such as an API key, is a
   configuration error, and nothing is sent.
-- **Surfaces.** Responses is the only native surface, and it streams. A
-  shorthand string `input` is sent as the one user message it abbreviates.
+- **Surfaces.** Responses and Chat Completions are native, and both
+  stream. A shorthand string `input` is sent as the one user message it
+  abbreviates. Chat is converted to Responses with the gateway's Chat field
+  policy: fields Codex cannot carry, such as `max_tokens` and `temperature`,
+  are dropped and reported as advisory losses, and a field that would change
+  the answer's structure is refused. `CodexConfig.ResponsesOnly` leaves Chat
+  to a `translation.Adapter` and the product's loss policy instead.
 - **Catalog.** `ListModels` returns only rows supported in the API and
   listed. A row that omits `supported_endpoints`, as current catalogs do,
   gets `/responses`.

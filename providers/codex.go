@@ -188,7 +188,7 @@ func (a codexAuthorization) apply(header http.Header, beta bool) {
 }
 
 func (p *CodexProvider) Complete(ctx context.Context, model string, payload map[string]any, _ *core.Credential) (map[string]any, error) {
-	request, err := p.transport.chatRequest(model, payload)
+	request, _, err := p.transport.chatRequest(model, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +228,7 @@ func (p *CodexProvider) CompleteResponses(ctx context.Context, model string, pay
 }
 
 func (p *CodexProvider) Stream(ctx context.Context, model string, payload map[string]any, _ *core.Credential) (StreamIter, error) {
-	request, err := p.transport.chatRequest(model, payload)
+	request, _, err := p.transport.chatRequest(model, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -298,18 +298,19 @@ func (t codexTransport) catalog(ctx context.Context, authorize codexAuthorizer, 
 }
 
 // chatRequest shapes a Chat Completions payload into a Codex Responses
-// request.
-func (t codexTransport) chatRequest(model string, payload map[string]any) (map[string]any, error) {
+// request, and returns the conversion's losses with Gemini thought
+// signatures exempted.
+func (t codexTransport) chatRequest(model string, payload map[string]any) (map[string]any, []translate.Loss, error) {
 	if model == "" || strings.TrimSpace(model) != model {
-		return nil, &InvocationError{Msg: "Codex model ID is required"}
+		return nil, nil, &InvocationError{Msg: "Codex model ID is required", class: core.ProviderErrorInvalidRequest}
 	}
 	rawMessages, ok := payload["messages"]
 	if !ok {
-		return nil, &InvocationError{Msg: "Codex messages are required"}
+		return nil, nil, &InvocationError{Msg: "Codex messages are required", class: core.ProviderErrorInvalidRequest}
 	}
 	messages, err := codexMessages(rawMessages)
 	if err != nil {
-		return nil, &InvocationError{Msg: "Codex messages are invalid", Cause: err}
+		return nil, nil, &InvocationError{Msg: "Codex messages are invalid", Cause: err, class: core.ProviderErrorInvalidRequest}
 	}
 	options := make(map[string]any, len(payload))
 	for key, value := range payload {
@@ -319,17 +320,18 @@ func (t codexTransport) chatRequest(model string, payload map[string]any) (map[s
 			options[key] = value
 		default:
 			if value != nil {
-				return nil, &InvocationError{Msg: "Codex request contains unsupported field " + key}
+				return nil, nil, &InvocationError{Msg: "Codex request contains unsupported field " + key, class: core.ProviderErrorUnsupported}
 			}
 		}
 	}
 	converted := translate.ChatToResponsesWithReport(model, messages, options, true)
-	if err := translate.RejectMaterialLoss(withoutThoughtSignatures(converted.Report)); err != nil {
-		return nil, &InvocationError{Msg: "Codex request contains unsupported fields", Cause: err}
+	losses := exemptThoughtSignatures(converted.Report.Losses)
+	if err := translate.RejectMaterialLoss(translate.Report{Losses: losses}); err != nil {
+		return nil, nil, &InvocationError{Msg: "Codex request contains unsupported fields", Cause: err, class: core.ProviderErrorUnsupported}
 	}
 	request := converted.Value
 	if err := validateCodexTools(request["tools"]); err != nil {
-		return nil, &InvocationError{Msg: "Codex request contains unsupported tools", Cause: err}
+		return nil, nil, &InvocationError{Msg: "Codex request contains unsupported tools", Cause: err, class: core.ProviderErrorUnsupported}
 	}
 	if existing, _ := request["instructions"].(string); existing != "" {
 		request["instructions"] = t.instructions + "\n\n" + existing
@@ -342,7 +344,7 @@ func (t codexTransport) chatRequest(model string, payload map[string]any) (map[s
 	if cacheKey, _ := payload["prompt_cache_key"].(string); cacheKey != "" {
 		request["prompt_cache_key"] = cacheKey
 	}
-	return request, nil
+	return request, losses, nil
 }
 
 // nativeRequest shapes a Responses payload into a Codex Responses request.
@@ -403,19 +405,21 @@ func (t codexTransport) nativeRequest(model string, payload map[string]any) (map
 	return request, nil
 }
 
-// withoutThoughtSignatures removes dropped Gemini thought signatures from a
-// request's loss report. llm-translate counts them as material because
-// Gemini needs a signature back on its next turn, but that turn is built
-// from the caller's history, which keeps it, and Codex has no use for one.
-// Codex served such histories before the loss was reported and still does.
-func withoutThoughtSignatures(report translate.Report) translate.Report {
-	losses := make([]translate.Loss, 0, len(report.Losses))
-	for _, loss := range report.Losses {
-		if loss.Class != translate.LossDropped || !strings.HasSuffix(loss.Path, ".thought_signature") {
-			losses = append(losses, loss)
+// exemptThoughtSignatures reports dropped Gemini thought signatures as
+// advisory. llm-translate counts them as material because Gemini needs a
+// signature back on its next turn, but that turn is built from the caller's
+// history, which keeps it, and Codex has no use for one. Codex served such
+// histories before the loss was reported and still does; the drop is still
+// reported.
+func exemptThoughtSignatures(losses []translate.Loss) []translate.Loss {
+	exempted := make([]translate.Loss, len(losses))
+	for i, loss := range losses {
+		if loss.Class == translate.LossDropped && strings.HasSuffix(loss.Path, ".thought_signature") {
+			loss.Severity = translate.LossAdvisory
 		}
+		exempted[i] = loss
 	}
-	return translate.Report{Losses: losses}
+	return exempted
 }
 
 func codexMessages(value any) ([]map[string]any, error) {

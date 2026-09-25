@@ -226,23 +226,40 @@ func TestCodexFailsClosedWithoutAChatGPTToken(t *testing.T) {
 	}
 }
 
-func TestCodexServesOnlyResponsesNatively(t *testing.T) {
+func TestCodexServesResponsesAndChatNatively(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
 	defer server.Close()
 	provider := newFixtureCodex(t, server)
-	if got := provider.NativeSurfaces("any-model"); !reflect.DeepEqual(got, []core.ModelSurface{core.ModelSurfaceResponses}) {
+	if got := provider.NativeSurfaces("any-model"); !reflect.DeepEqual(got, []core.ModelSurface{core.ModelSurfaceResponses, core.ModelSurfaceChatCompletions}) {
 		t.Fatalf("native surfaces = %v", got)
 	}
-	request := codexResponsesRequest(`{"messages":[{"role":"user","content":"hello"}]}`)
-	request.Surface = core.ModelSurfaceChatCompletions
-	var surface *core.SurfaceError
-	if _, err := provider.Invoke(context.Background(), request); !errors.As(err, &surface) || !core.ClassifyError(err).FailoverEligible {
-		t.Fatalf("Chat invoke err = %v, want a *core.SurfaceError", err)
+	responsesOnly, err := NewCodex(CodexConfig{Instructions: "required", ClientVersion: fixtureCodexClientVersion, ResponsesOnly: true})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := provider.Stream(context.Background(), request); !errors.As(err, &surface) {
-		t.Fatalf("Chat stream err = %v, want a *core.SurfaceError", err)
+	if got := responsesOnly.NativeSurfaces("any-model"); !reflect.DeepEqual(got, []core.ModelSurface{core.ModelSurfaceResponses}) {
+		t.Fatalf("Responses-only native surfaces = %v", got)
+	}
+	chat := codexResponsesRequest(`{"messages":[{"role":"user","content":"hello"}]}`)
+	chat.Surface = core.ModelSurfaceChatCompletions
+	messages := codexResponsesRequest(`{"max_tokens":8,"messages":[{"role":"user","content":"hello"}]}`)
+	messages.Surface = core.ModelSurfaceMessages
+	for name, refused := range map[string]struct {
+		provider *Codex
+		request  core.Request
+	}{
+		"Messages":                 {provider, messages},
+		"Chat when Responses-only": {responsesOnly, chat},
+	} {
+		var surface *core.SurfaceError
+		if _, err := refused.provider.Invoke(context.Background(), refused.request); !errors.As(err, &surface) || !core.ClassifyError(err).FailoverEligible {
+			t.Fatalf("%s invoke err = %v, want a *core.SurfaceError", name, err)
+		}
+		if _, err := refused.provider.Stream(context.Background(), refused.request); !errors.As(err, &surface) {
+			t.Fatalf("%s stream err = %v, want a *core.SurfaceError", name, err)
+		}
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("upstream received %d requests for a surface Codex lacks", calls.Load())

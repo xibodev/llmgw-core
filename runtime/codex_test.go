@@ -16,6 +16,7 @@ import (
 
 	codexauth "github.com/xibodev/llm-provider-auth/codex"
 	"github.com/xibodev/llm-provider-auth/tokenstore"
+	translate "github.com/xibodev/llm-translate"
 
 	core "github.com/xibodev/llmgw-core"
 	"github.com/xibodev/llmgw-core/providers"
@@ -98,11 +99,12 @@ func newCodexRuntime(t *testing.T, server *httptest.Server, store core.Credentia
 	t.Helper()
 	runtime, err := coreruntime.New(coreruntime.Options[codexSettings]{
 		Settings: coreruntime.NewMemorySettings(codexSettings{BaseURL: server.URL}),
-		Providers: func(settings codexSettings, _ string) (core.Provider, error) {
+		Providers: func(settings codexSettings, instance string) (core.Provider, error) {
 			codex, err := providers.NewCodex(providers.CodexConfig{
 				Instructions: "Follow the caller's request.", ClientVersion: "fixture-client/1.0",
 				ResponsesURL: settings.BaseURL + "/backend-api/codex/responses",
 				ModelsURL:    settings.BaseURL + "/backend-api/codex/models", Client: server.Client(),
+				ResponsesOnly: instance == "codex-responses-only",
 			})
 			if err != nil {
 				return nil, err
@@ -138,6 +140,7 @@ func TestRuntimeServesTheCodexVertical(t *testing.T) {
 	}
 	owner := core.Caller{ID: "owner", Kind: core.CallerHuman}
 	store.Bind(owner, "codex", "owner-codex")
+	store.Bind(owner, "codex-responses-only", "owner-codex")
 	evidence := &core.MemoryEvidenceSink{}
 	runtime := newCodexRuntime(t, server, store, evidence)
 	responses := core.Request{
@@ -194,27 +197,68 @@ func TestRuntimeServesTheCodexVertical(t *testing.T) {
 		}
 	})
 
-	t.Run("chat through the adapter", func(t *testing.T) {
+	// Codex serves Chat natively, dropping what it cannot carry, as the
+	// gateway's Chat facade does. A Responses-only instance leaves Chat to
+	// the Adapter, which translates it; both reach Codex identically.
+	for instance, chat := range map[string]string{
+		"codex":                `{"model":"gpt-fixture","stream":false,"max_tokens":64,"temperature":0.2,"messages":[{"role":"user","content":"Say hello"}]}`,
+		"codex-responses-only": `{"model":"gpt-fixture","stream":false,"messages":[{"role":"user","content":"Say hello"}]}`,
+	} {
+		t.Run("chat on "+instance, func(t *testing.T) {
+			response, err := runtime.Invoke(ctx, owner, instance, core.Request{
+				Surface: core.ModelSurfaceChatCompletions, Model: "gpt-fixture", ContentType: core.ContentTypeJSON, Body: []byte(chat),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body struct {
+				Object  string `json:"object"`
+				Choices []struct {
+					FinishReason string                   `json:"finish_reason"`
+					Message      struct{ Content string } `json:"message"`
+				} `json:"choices"`
+				Usage struct {
+					TotalTokens int `json:"total_tokens"`
+				} `json:"usage"`
+			}
+			if json.Unmarshal(response.Body, &body) != nil || body.Object != "chat.completion" || len(body.Choices) != 1 ||
+				body.Choices[0].Message.Content != "Hello from codex" || body.Choices[0].FinishReason != "stop" || body.Usage.TotalTokens != 7 {
+				t.Fatalf("chat response = %s", response.Body)
+			}
+			var dropped []string
+			for _, loss := range response.Losses {
+				if loss.Class == translate.LossDropped && loss.Severity == translate.LossAdvisory {
+					dropped = append(dropped, loss.Path)
+				}
+			}
+			if want := map[string][]string{"codex": {"max_tokens", "temperature"}}[instance]; !slices.Equal(dropped, want) {
+				t.Fatalf("dropped = %v, want %v", dropped, want)
+			}
+			if calls := backend.take(); !reflect.DeepEqual(calls, []codexCall{inference}) {
+				t.Fatalf("upstream = %+v", calls)
+			}
+		})
+	}
+
+	t.Run("messages through the adapter over native chat", func(t *testing.T) {
 		response, err := runtime.Invoke(ctx, owner, "codex", core.Request{
-			Surface: core.ModelSurfaceChatCompletions, Model: "gpt-fixture", ContentType: core.ContentTypeJSON,
-			Body: []byte(`{"model":"gpt-fixture","stream":false,"messages":[{"role":"user","content":"Say hello"}]}`),
+			Surface: core.ModelSurfaceMessages, Model: "gpt-fixture", ContentType: core.ContentTypeJSON,
+			Body: []byte(`{"model":"gpt-fixture","stream":false,"max_tokens":64,"messages":[{"role":"user","content":"Say hello"}]}`),
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		var body struct {
-			Object  string `json:"object"`
-			Choices []struct {
-				FinishReason string                   `json:"finish_reason"`
-				Message      struct{ Content string } `json:"message"`
-			} `json:"choices"`
-			Usage struct {
-				TotalTokens int `json:"total_tokens"`
-			} `json:"usage"`
+			Type       string                  `json:"type"`
+			StopReason string                  `json:"stop_reason"`
+			Content    []struct{ Text string } `json:"content"`
 		}
-		if json.Unmarshal(response.Body, &body) != nil || body.Object != "chat.completion" || len(body.Choices) != 1 ||
-			body.Choices[0].Message.Content != "Hello from codex" || body.Choices[0].FinishReason != "stop" || body.Usage.TotalTokens != 7 {
-			t.Fatalf("chat response = %s", response.Body)
+		if json.Unmarshal(response.Body, &body) != nil || body.Type != "message" || body.StopReason != "end_turn" ||
+			len(body.Content) != 1 || body.Content[0].Text != "Hello from codex" {
+			t.Fatalf("messages response = %s", response.Body)
+		}
+		if !slices.ContainsFunc(response.Losses, func(loss core.Loss) bool { return loss.Path == "max_tokens" && loss.Class == translate.LossDropped }) {
+			t.Fatalf("losses = %+v, want max_tokens dropped by Codex", response.Losses)
 		}
 		if calls := backend.take(); !reflect.DeepEqual(calls, []codexCall{inference}) {
 			t.Fatalf("upstream = %+v", calls)

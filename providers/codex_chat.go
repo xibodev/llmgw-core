@@ -47,8 +47,8 @@ func codexChatFields(body map[string]any) (map[string]any, []core.Loss, error) {
 			continue
 		}
 		detail := "the Codex Responses transport does not carry this Chat field"
-		if codexStructuralChatField(field) {
-			if !codexChatFieldDefault(field, value) {
+		if structuralChatField(field) {
+			if !chatFieldDefault(field, value) {
 				return nil, nil, &core.ProviderError{
 					Message: "Chat field " + field + " is not supported by the Codex Responses transport",
 					Class:   core.ProviderErrorUnsupported, Classification: core.ProviderErrorClassification{FailoverEligible: true},
@@ -61,9 +61,9 @@ func codexChatFields(body map[string]any) (map[string]any, []core.Loss, error) {
 	return chat, losses, nil
 }
 
-// codexStructuralChatField reports a Chat field that changes the structure
-// of the answer, which Codex must not drop silently.
-func codexStructuralChatField(field string) bool {
+// structuralChatField reports a Chat field that changes the structure of
+// the answer, which neither Codex nor Antigravity drops silently.
+func structuralChatField(field string) bool {
 	switch field {
 	case "response_format", "n", "logprobs", "top_logprobs", "audio", "modalities", "prediction", "tool_choice", "parallel_tool_calls":
 		return true
@@ -71,10 +71,10 @@ func codexStructuralChatField(field string) bool {
 	return false
 }
 
-// codexChatFieldDefault reports a structural field set to what the Codex
-// transport does anyway: one choice, no log probabilities, parallel and
+// chatFieldDefault reports a structural field set to what Codex and
+// Antigravity do anyway: one choice, no log probabilities, parallel and
 // automatic tool calls, text only.
-func codexChatFieldDefault(field string, value any) bool {
+func chatFieldDefault(field string, value any) bool {
 	switch field {
 	case "n":
 		return codexChatInt(value) == 1

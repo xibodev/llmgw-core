@@ -31,57 +31,72 @@ const (
 	antigravityMaxImages      = 1
 )
 
-// ErrExperimentalAntigravityStreamingUnsupported reports that this adapter
-// currently buffers Cloud Code Assist SSE and exposes only Complete.
+// ErrExperimentalAntigravityStreamingUnsupported reports that Antigravity
+// reads Cloud Code Assist's stream to its end and does not stream. Both
+// Antigravity.Stream and ExperimentalAntigravityProvider.Stream report it.
 var ErrExperimentalAntigravityStreamingUnsupported = errors.New("experimental antigravity streaming is unsupported")
+
+// errAntigravityNoProject reports a loadCodeAssist answer without a project.
+var errAntigravityNoProject = errors.New("antigravity project discovery returned no project ID")
 
 // AntigravityTokenSource supplies a current access token and, when known, the
 // Cloud AI companion project ID. Returning an empty project ID triggers
 // loadCodeAssist discovery. The adapter never persists either value.
+//
+// Deprecated: it serves only ExperimentalAntigravityProvider. Antigravity
+// reads the token and the project from each request's core.Credential.
 type AntigravityTokenSource func(ctx context.Context) (accessToken, projectID string, err error)
 
 // AntigravityUnauthorizedHandler lets an owner recover a token rejected by the
 // upstream service. The adapter invokes it at most once per operation.
+//
+// Deprecated: it serves only ExperimentalAntigravityProvider. Antigravity
+// fails a rejected token with status 401, which a Runtime refreshes with
+// NewAntigravityRefresh before it replays the request.
 type AntigravityUnauthorizedHandler func(ctx context.Context, rejectedAccessToken string) error
 
 // AntigravityProjectObserver reports project discovery without assuming how or
 // whether the owner stores it.
+//
+// Deprecated: it serves only ExperimentalAntigravityProvider. Use
+// AntigravityConfig.ProjectResolved.
 type AntigravityProjectObserver func(ctx context.Context, accessToken, projectID string) error
 
 // ExperimentalAntigravityProvider is a storage-neutral experimental adapter
 // for Google's undocumented Cloud Code Assist v1internal API.
+//
+// Deprecated: Use Antigravity, which implements core.Provider. It takes the
+// credential and its project from each request, so a Runtime can refresh a
+// rejected token and replay the request, and it lists models as the gateway
+// does. ExperimentalAntigravityProvider shares its transport, so both send
+// identical requests.
 type ExperimentalAntigravityProvider struct {
 	tokenSource  AntigravityTokenSource
 	unauthorized AntigravityUnauthorizedHandler
 	project      AntigravityProjectObserver
-	client       *http.Client
-	baseURL      string
+	transport    antigravityTransport
 }
 
 // NewExperimentalAntigravityProvider constructs the opt-in experimental
 // adapter. It does not implement OAuth, refresh tokens, or credential storage.
 // A blank baseURL selects Google's Cloud Code Assist endpoint.
+//
+// Deprecated: Use NewAntigravity.
 func NewExperimentalAntigravityProvider(tokenSource AntigravityTokenSource, client *http.Client, baseURL string) *ExperimentalAntigravityProvider {
-	if client == nil {
-		client = &http.Client{Timeout: 120 * time.Second}
-	}
-	if strings.TrimSpace(baseURL) == "" {
-		baseURL = antigravityDefaultBaseURL
-	}
-	return &ExperimentalAntigravityProvider{
-		tokenSource: tokenSource,
-		client:      client,
-		baseURL:     strings.TrimRight(baseURL, "/"),
-	}
+	return &ExperimentalAntigravityProvider{tokenSource: tokenSource, transport: newAntigravityTransport(client, baseURL)}
 }
 
 // SetUnauthorizedHandler configures one-shot recovery from an upstream 401.
+//
+// Deprecated: see AntigravityUnauthorizedHandler.
 func (p *ExperimentalAntigravityProvider) SetUnauthorizedHandler(handler AntigravityUnauthorizedHandler) {
 	p.unauthorized = handler
 }
 
 // SetProjectObserver configures notification when loadCodeAssist discovers a
 // project that was absent from the token source.
+//
+// Deprecated: see AntigravityProjectObserver.
 func (p *ExperimentalAntigravityProvider) SetProjectObserver(observer AntigravityProjectObserver) {
 	p.project = observer
 }
@@ -99,29 +114,15 @@ func (p *ExperimentalAntigravityProvider) ListModels(ctx context.Context, _ *cor
 }
 
 func (p *ExperimentalAntigravityProvider) listModels(ctx context.Context) ([]core.ModelInfo, string, error) {
-	token, projectID, err := p.authentication(ctx)
+	token, projectID, err := p.session(ctx)
 	if err != nil {
-		return nil, "", err
-	}
-	if projectID == "" {
-		projectID, err = p.loadCodeAssist(ctx, token)
-		if err != nil {
-			return nil, token, err
-		}
-		if p.project != nil {
-			if err := p.project(ctx, token, projectID); err != nil {
-				return nil, token, fmt.Errorf("antigravity project observation: %w", err)
-			}
-		}
-	}
-
-	var response antigravityCatalogResponse
-	if err := p.postJSON(ctx, token, "/v1internal:fetchAvailableModels", map[string]any{
-		"project": projectID,
-	}, "antigravity model discovery", &response, false); err != nil {
 		return nil, token, err
 	}
-	return response.models(), token, nil
+	catalog, err := p.transport.decodedCatalog(ctx, token, projectID)
+	if err != nil {
+		return nil, token, err
+	}
+	return catalog.models(), token, nil
 }
 
 // GenerateImages requests Gemini text and image response modalities. The
@@ -140,61 +141,58 @@ func (p *ExperimentalAntigravityProvider) GenerateImages(ctx context.Context, re
 }
 
 func (p *ExperimentalAntigravityProvider) generateImages(ctx context.Context, request core.GenerateImagesRequest) (core.GenerateImagesResult, string, error) {
+	request, err := antigravityImageRequest(request)
+	if err != nil {
+		return core.GenerateImagesResult{}, "", antigravityImageRefusal(err)
+	}
+	token, projectID, err := p.session(ctx)
+	if err != nil {
+		return core.GenerateImagesResult{}, token, err
+	}
+	catalog, err := p.transport.decodedCatalog(ctx, token, projectID)
+	if err != nil {
+		return core.GenerateImagesResult{}, token, err
+	}
+	if err := antigravityImageModel(catalog, request.Model); err != nil {
+		return core.GenerateImagesResult{}, token, err
+	}
+	result, err := p.transport.generateImage(ctx, token, projectID, request)
+	return result, token, err
+}
+
+// antigravityImageRequest normalizes an image request, or says why
+// Antigravity cannot serve it. A zero count asks for one image.
+func antigravityImageRequest(request core.GenerateImagesRequest) (core.GenerateImagesRequest, error) {
 	request.Model = strings.TrimSpace(request.Model)
 	request.Prompt = strings.TrimSpace(request.Prompt)
 	if request.Model == "" || request.Prompt == "" {
-		return core.GenerateImagesResult{}, "", core.NewProviderOperationError("antigravity image generation validation", http.StatusBadRequest, "", errors.New("model and prompt are required"))
+		return request, errors.New("model and prompt are required")
 	}
 	if request.Count == 0 {
 		request.Count = 1
 	}
 	if request.Count < 0 {
-		return core.GenerateImagesResult{}, "", core.NewProviderOperationError("antigravity image generation validation", http.StatusBadRequest, "", errors.New("count must not be negative"))
+		return request, errors.New("count must not be negative")
 	}
 	if request.Count > antigravityMaxImages {
-		return core.GenerateImagesResult{}, "", core.NewProviderOperationError("antigravity image generation validation", http.StatusBadRequest, "", fmt.Errorf("count exceeds %d", antigravityMaxImages))
+		return request, fmt.Errorf("count exceeds %d", antigravityMaxImages)
 	}
-	token, projectID, err := p.authentication(ctx)
-	if err != nil {
-		return core.GenerateImagesResult{}, "", err
-	}
-	if projectID == "" {
-		projectID, err = p.loadCodeAssist(ctx, token)
-		if err != nil {
-			return core.GenerateImagesResult{}, token, err
-		}
-		if p.project != nil {
-			if err := p.project(ctx, token, projectID); err != nil {
-				return core.GenerateImagesResult{}, token, fmt.Errorf("antigravity project observation: %w", err)
-			}
-		}
-	}
-	var catalog antigravityCatalogResponse
-	if err := p.postJSON(ctx, token, "/v1internal:fetchAvailableModels", map[string]any{"project": projectID}, "antigravity model discovery", &catalog, false); err != nil {
-		return core.GenerateImagesResult{}, token, err
-	}
-	if _, rootMember := catalog.Models[request.Model]; !rootMember || rosterSupport(catalog.ImageGenerationModelIDs, request.Model) != core.SupportSupported {
-		return core.GenerateImagesResult{}, token, core.NewProviderOperationError("antigravity image model unsupported", http.StatusBadRequest, "", nil)
-	}
+	return request, nil
+}
 
-	requestID := newAntigravityID("agent")
-	envelope := map[string]any{
-		"project": projectID,
-		"model":   request.Model,
-		"request": map[string]any{
-			"contents":         []any{map[string]any{"role": "user", "parts": []any{map[string]any{"text": request.Prompt}}}},
-			"generationConfig": map[string]any{"responseModalities": []string{"TEXT", "IMAGE"}},
-		},
-		"requestType": "agent",
-		"userAgent":   "antigravity",
-		"requestId":   requestID,
+// antigravityImageRefusal reports an image request refused before anything
+// is sent with status 400, as the legacy adapter always has.
+func antigravityImageRefusal(reason error) error {
+	return core.NewProviderOperationError("antigravity image generation validation", http.StatusBadRequest, "", reason)
+}
+
+// antigravityImageModel refuses a model that the root roster and the image
+// roster of the same catalog do not both name.
+func antigravityImageModel(catalog antigravityCatalogResponse, model string) error {
+	if _, rootMember := catalog.Models[model]; !rootMember || rosterSupport(catalog.ImageGenerationModelIDs, model) != core.SupportSupported {
+		return core.NewProviderOperationError("antigravity image model unsupported", http.StatusBadRequest, "", nil)
 	}
-	var body bytes.Buffer
-	if err := p.postJSON(ctx, token, "/v1internal:streamGenerateContent?alt=sse", envelope, "antigravity image generation", &body, true); err != nil {
-		return core.GenerateImagesResult{}, token, err
-	}
-	result, err := parseAntigravityImageSSE(&body, request.Count)
-	return result, token, err
+	return nil
 }
 
 func (p *ExperimentalAntigravityProvider) Complete(ctx context.Context, model string, payload map[string]any, _ *core.Credential) (map[string]any, error) {
@@ -213,41 +211,15 @@ func (p *ExperimentalAntigravityProvider) complete(ctx context.Context, model st
 	if strings.TrimSpace(model) == "" {
 		return nil, "", fmt.Errorf("antigravity model is required")
 	}
-	token, projectID, err := p.authentication(ctx)
+	token, projectID, err := p.session(ctx)
 	if err != nil {
-		return nil, "", err
+		return nil, token, err
 	}
-	if projectID == "" {
-		projectID, err = p.loadCodeAssist(ctx, token)
-		if err != nil {
-			return nil, token, err
-		}
-		if p.project != nil {
-			if err := p.project(ctx, token, projectID); err != nil {
-				return nil, token, fmt.Errorf("antigravity project observation: %w", err)
-			}
-		}
-	}
-
 	request, err := mapAntigravityRequest(payload)
 	if err != nil {
 		return nil, token, err
 	}
-	requestID := newAntigravityID("agent")
-	envelope := map[string]any{
-		"project":     projectID,
-		"model":       model,
-		"request":     request,
-		"requestType": "agent",
-		"userAgent":   "antigravity",
-		"requestId":   requestID,
-	}
-
-	var body bytes.Buffer
-	if err := p.postJSON(ctx, token, "/v1internal:streamGenerateContent?alt=sse", envelope, "antigravity completion", &body, true); err != nil {
-		return nil, token, err
-	}
-	response, err := parseAntigravitySSE(&body, model, requestID)
+	response, err := p.transport.complete(ctx, token, projectID, model, request)
 	return response, token, err
 }
 
@@ -284,30 +256,131 @@ func (p *ExperimentalAntigravityProvider) authentication(ctx context.Context) (s
 	return token, strings.TrimSpace(projectID), nil
 }
 
-func (p *ExperimentalAntigravityProvider) loadCodeAssist(ctx context.Context, token string) (string, error) {
+// session returns the token and the project of one legacy operation. A
+// project the token source omits is discovered and reported to the
+// observer. A discovery failure still returns the token, so that a
+// rejected one can be recovered.
+func (p *ExperimentalAntigravityProvider) session(ctx context.Context) (token, projectID string, err error) {
+	token, projectID, err = p.authentication(ctx)
+	if err != nil || projectID != "" {
+		return token, projectID, err
+	}
+	if projectID, err = p.transport.loadCodeAssist(ctx, token); err != nil {
+		return token, "", err
+	}
+	if p.project != nil {
+		if err := p.project(ctx, token, projectID); err != nil {
+			return token, "", fmt.Errorf("antigravity project observation: %w", err)
+		}
+	}
+	return token, projectID, nil
+}
+
+// antigravityStreamPath streams a generation, which is the only way Cloud
+// Code Assist answers the Antigravity agent.
+const antigravityStreamPath = "/v1internal:streamGenerateContent?alt=sse"
+
+// antigravityTransport is the Cloud Code Assist wire protocol: the headers,
+// the envelopes, project discovery, the catalog and the buffered stream.
+// Every Antigravity provider API uses it, so none can drift from another.
+type antigravityTransport struct {
+	client  *http.Client
+	baseURL string
+}
+
+func newAntigravityTransport(client *http.Client, baseURL string) antigravityTransport {
+	if client == nil {
+		client = &http.Client{Timeout: 120 * time.Second}
+	}
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = antigravityDefaultBaseURL
+	}
+	return antigravityTransport{client: client, baseURL: strings.TrimRight(baseURL, "/")}
+}
+
+// loadCodeAssist discovers the project of the account token acts for.
+func (t antigravityTransport) loadCodeAssist(ctx context.Context, token string) (string, error) {
 	var response struct {
 		Project string `json:"cloudaicompanionProject"`
 	}
-	err := p.postJSON(ctx, token, "/v1internal:loadCodeAssist", map[string]any{
+	err := t.postJSON(ctx, token, "/v1internal:loadCodeAssist", map[string]any{
 		"metadata": antigravityClientMetadata(),
-	}, "antigravity project discovery", &response, false)
+	}, "antigravity project discovery", &response)
 	if err != nil {
 		return "", err
 	}
 	if strings.TrimSpace(response.Project) == "" {
-		return "", fmt.Errorf("antigravity project discovery returned no project ID")
+		return "", errAntigravityNoProject
 	}
 	return response.Project, nil
 }
 
-func (p *ExperimentalAntigravityProvider) postJSON(ctx context.Context, token, path string, payload any, op string, result any, sse bool) error {
+// catalog returns the undecoded fetchAvailableModels response for project,
+// with its status.
+func (t antigravityTransport) catalog(ctx context.Context, token, projectID string) ([]byte, int, error) {
+	return t.post(ctx, token, "/v1internal:fetchAvailableModels", map[string]any{"project": projectID}, "antigravity model discovery", false)
+}
+
+func (t antigravityTransport) decodedCatalog(ctx context.Context, token, projectID string) (antigravityCatalogResponse, error) {
+	raw, status, err := t.catalog(ctx, token, projectID)
+	if err != nil {
+		return antigravityCatalogResponse{}, err
+	}
+	catalog, err := decodeAntigravityCatalog(raw)
+	if err != nil {
+		return antigravityCatalogResponse{}, antigravityCatalogDecodeError(status, err)
+	}
+	return catalog, nil
+}
+
+func antigravityCatalogDecodeError(status int, err error) error {
+	return core.NewProviderOperationError("antigravity model discovery response decode", status, "", err)
+}
+
+// complete sends one mapped Chat request and returns the stream, read to
+// its end, as a Chat completion.
+func (t antigravityTransport) complete(ctx context.Context, token, projectID, model string, request antigravityRequest) (map[string]any, error) {
+	requestID := newAntigravityID("agent")
+	body, _, err := t.post(ctx, token, antigravityStreamPath, antigravityEnvelope(projectID, model, request, requestID), "antigravity completion", true)
+	if err != nil {
+		return nil, err
+	}
+	return parseAntigravitySSE(bytes.NewReader(body), model, requestID)
+}
+
+// generateImage asks for text and image modalities and returns the images
+// the stream carries.
+func (t antigravityTransport) generateImage(ctx context.Context, token, projectID string, request core.GenerateImagesRequest) (core.GenerateImagesResult, error) {
+	envelope := antigravityEnvelope(projectID, request.Model, map[string]any{
+		"contents":         []any{map[string]any{"role": "user", "parts": []any{map[string]any{"text": request.Prompt}}}},
+		"generationConfig": map[string]any{"responseModalities": []string{"TEXT", "IMAGE"}},
+	}, newAntigravityID("agent"))
+	body, _, err := t.post(ctx, token, antigravityStreamPath, envelope, "antigravity image generation", true)
+	if err != nil {
+		return core.GenerateImagesResult{}, err
+	}
+	return parseAntigravityImageSSE(bytes.NewReader(body), request.Count)
+}
+
+// antigravityEnvelope wraps a Gemini request as the Antigravity agent does.
+func antigravityEnvelope(projectID, model string, request any, requestID string) map[string]any {
+	return map[string]any{
+		"project": projectID, "model": model, "request": request,
+		"requestType": "agent", "userAgent": "antigravity", "requestId": requestID,
+	}
+}
+
+// post sends one request and returns the body of a successful response
+// with its status. A failure names only the operation, the status and
+// Retry-After, never the response body, which may echo the request.
+func (t antigravityTransport) post(ctx context.Context, token, path string, payload any, op string, sse bool) ([]byte, int, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("marshal antigravity request: %w", err)
+		return nil, 0, fmt.Errorf("marshal antigravity request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+path, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.baseURL+path, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create antigravity request: %w", err)
+		return nil, 0, fmt.Errorf("create antigravity request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
@@ -319,29 +392,34 @@ func (p *ExperimentalAntigravityProvider) postJSON(ctx context.Context, token, p
 		req.Header.Set("Accept", "text/event-stream")
 	}
 
-	resp, err := p.client.Do(req)
+	resp, err := t.client.Do(req)
 	if err != nil {
-		return core.NewProviderOperationError(op, 0, "", err)
+		return nil, 0, core.NewProviderOperationError(op, 0, "", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, antigravityMaxBodyBytes))
-		return core.NewProviderOperationError(op, resp.StatusCode, resp.Header.Get("Retry-After"), nil)
+		return nil, resp.StatusCode, core.NewProviderOperationError(op, resp.StatusCode, resp.Header.Get("Retry-After"), nil)
 	}
 
 	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, antigravityMaxBodyBytes+1))
 	if err != nil {
-		return core.NewProviderOperationError(op+" response read", resp.StatusCode, "", err)
+		return nil, resp.StatusCode, core.NewProviderOperationError(op+" response read", resp.StatusCode, "", err)
 	}
 	if len(responseBody) > antigravityMaxBodyBytes {
-		return core.NewProviderOperationError(op+" response read", resp.StatusCode, "", errors.New("response exceeds the size limit"))
+		return nil, resp.StatusCode, core.NewProviderOperationError(op+" response read", resp.StatusCode, "", errors.New("response exceeds the size limit"))
 	}
-	if destination, ok := result.(*bytes.Buffer); ok {
-		_, _ = destination.Write(responseBody)
-		return nil
+	return responseBody, resp.StatusCode, nil
+}
+
+// postJSON decodes a successful JSON response into result.
+func (t antigravityTransport) postJSON(ctx context.Context, token, path string, payload any, op string, result any) error {
+	body, status, err := t.post(ctx, token, path, payload, op, false)
+	if err != nil {
+		return err
 	}
-	if err := json.Unmarshal(responseBody, result); err != nil {
-		return core.NewProviderOperationError(op+" response decode", resp.StatusCode, "", err)
+	if err := json.Unmarshal(body, result); err != nil {
+		return core.NewProviderOperationError(op+" response decode", status, "", err)
 	}
 	return nil
 }

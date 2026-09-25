@@ -27,6 +27,11 @@ func zenChatForwarded(field string) bool {
 // zenChat splits a Chat body into its messages and options, as the gateway
 // holds a Chat request. The request and the operation decide the model and
 // the stream flag, so the body's are dropped.
+//
+// llm-translate carries a Responses request's max_output_tokens into Chat
+// as _max_output_tokens, and the gateway's transport sends it as
+// max_completion_tokens unless the request sets a limit of its own, so a
+// Responses request a translation.Adapter serves over Chat keeps its limit.
 func zenChat(payload map[string]any) ([]map[string]any, map[string]any, error) {
 	messages, err := codexMessages(payload["messages"])
 	if err != nil {
@@ -36,6 +41,12 @@ func zenChat(payload map[string]any) ([]map[string]any, map[string]any, error) {
 	for key, value := range payload {
 		if key != "model" && key != "messages" && key != "stream" {
 			options[key] = value
+		}
+	}
+	if limit := options["_max_output_tokens"]; limit != nil {
+		delete(options, "_max_output_tokens")
+		if options["max_tokens"] == nil && options["max_completion_tokens"] == nil {
+			options["max_completion_tokens"] = limit
 		}
 	}
 	return messages, options, nil

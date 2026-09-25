@@ -11,6 +11,7 @@ import (
 
 	core "github.com/xibodev/llmgw-core"
 	"github.com/xibodev/llmgw-core/providers/zen"
+	"github.com/xibodev/llmgw-core/translation"
 )
 
 func TestZenShapesKeyedChatAsTheGatewayDoes(t *testing.T) {
@@ -41,6 +42,37 @@ func TestZenShapesKeyedChatAsTheGatewayDoes(t *testing.T) {
 	}
 	calls[0].header.Del("Copilot-Vision-Request")
 	assertZenHeaders(t, calls[0].header, "Bearer fixture-key", "", identity)
+}
+
+// A Responses request an Adapter serves over Chat carries its output limit
+// as _max_output_tokens, which the gateway sends as max_completion_tokens.
+func TestZenSendsATranslatedOutputLimit(t *testing.T) {
+	t.Parallel()
+	const completion = `{"id":"chatcmpl-keyed","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"Hello"},"finish_reason":"stop"}]}`
+	backend := &zenBackend{reply: func(w http.ResponseWriter, _ *http.Request, _ int) { _, _ = io.WriteString(w, completion) }}
+	server := httptest.NewServer(backend)
+	defer server.Close()
+	provider := newTestZen(t, server, nil)
+	key := &core.Credential{APIKey: "fixture-key"}
+	for body, want := range map[string]string{
+		`{"messages":[{"role":"user","content":"Say hello"}],"_max_output_tokens":64,"temperature":0.2}`: `{"max_completion_tokens":64,"messages":[{"content":"Say hello","role":"user"}],"model":"big-pickle","stream":false,"temperature":0.2}`,
+		`{"messages":[{"role":"user","content":"Say hello"}],"_max_output_tokens":64,"max_tokens":32}`:   `{"max_tokens":32,"messages":[{"content":"Say hello","role":"user"}],"model":"big-pickle","stream":false}`,
+	} {
+		if _, err := provider.Invoke(context.Background(), chatRequest("big-pickle", body, key)); err != nil {
+			t.Fatal(err)
+		}
+		if calls := backend.take(); len(calls) != 1 || calls[0].body != want {
+			t.Fatalf("%s: upstream = %+v", body, calls)
+		}
+	}
+	adapter := translation.Adapter{Provider: provider}
+	response, err := adapter.Invoke(context.Background(), responsesRequest("big-pickle", `{"input":"Say hello","max_output_tokens":64}`, key))
+	if err != nil || !strings.Contains(string(response.Body), `"object":"response"`) {
+		t.Fatalf("response = %s, err = %v", response.Body, err)
+	}
+	if calls := backend.take(); len(calls) != 1 || !strings.Contains(calls[0].body, `"max_completion_tokens":64`) || strings.Contains(calls[0].body, "_max_output_tokens") {
+		t.Fatalf("translated upstream = %+v", calls)
+	}
 }
 
 // zenMuseEvents is the gateway's Muse regression stream: reasoning and tool

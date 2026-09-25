@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	gcp "github.com/xibodev/llm-provider-auth/gcp"
 	core "github.com/xibodev/llmgw-core"
 )
 
@@ -65,11 +66,11 @@ type GoogleConfig struct {
 	// "default" leaves it to Vertex AI, "paygo" asks for shared pay-as-you-go
 	// capacity, and "dedicated" for Provisioned Throughput.
 	RequestType string
-	// Client performs every request. Nil uses a client that times out after
-	// 120 seconds.
+	// Client performs every request but a service account's token
+	// exchange. Nil uses a client that times out after 120 seconds.
 	Client *http.Client
-	// Now reads Retry-After dates and stamps catalog discovery. Nil uses
-	// time.Now.
+	// Now reads Retry-After dates, stamps catalog discovery and dates the
+	// assertions of service accounts. Nil uses time.Now.
 	Now func() time.Time
 }
 
@@ -87,9 +88,11 @@ type GoogleConfig struct {
 //
 // Each operation authenticates with the credential it is given: an API key
 // travels in x-goog-api-key and never in a URL, and a token is the bearer.
-// Vertex AI refuses to run without a credential and nothing is sent; AI
-// Studio sends what it has, as the gateway does, for a proxy that holds the
-// key.
+// On Vertex AI a credential of kind core.TokenTypeGCPServiceAccount is a
+// service-account key, exchanged for cloud-platform access tokens that the
+// instance caches until shortly before they expire. Vertex AI refuses to run
+// without a credential and nothing is sent; AI Studio sends what it has, as
+// the gateway does, for a proxy that holds the key.
 type Google struct {
 	deployment  GoogleDeployment
 	baseURL     string
@@ -98,6 +101,9 @@ type Google struct {
 	requestType string
 	client      *http.Client
 	now         func() time.Time
+	// tokens holds the access tokens this instance minted, so instances
+	// share none.
+	tokens *gcp.TokenCache
 }
 
 var _ core.Provider = (*Google)(nil)
@@ -110,7 +116,10 @@ func NewGoogle(config GoogleConfig) (*Google, error) {
 			return nil, errors.New("Google base URL must be an absolute HTTP URL")
 		}
 	}
-	p := &Google{deployment: config.Deployment, baseURL: base, client: config.Client, now: config.Now}
+	p := &Google{
+		deployment: config.Deployment, baseURL: base, client: config.Client, now: config.Now,
+		tokens: &gcp.TokenCache{Now: config.Now},
+	}
 	switch config.Deployment {
 	case GoogleAIStudio:
 		if p.baseURL == "" {

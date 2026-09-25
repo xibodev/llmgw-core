@@ -113,13 +113,27 @@ func (p *Google) vertexModels(ctx context.Context, access googleAccess) ([]core.
 	}
 	authorization, err := p.authorization(access)
 	if err != nil {
-		return nil, err
+		return nil, googleCatalogTokenFailure(ctx, err)
 	}
 	if !authorization.bearer() {
 		return nil, googleCatalogRefusal(CatalogCodeNotDiscoverable, "Vertex AI model discovery requires a service account credential; "+
 			"the catalog is not discoverable with an API key alone.")
 	}
 	return p.vertexPublisherModels(ctx, authorization, "google")
+}
+
+// googleCatalogTokenFailure reports a token exchange that failed for a
+// catalog with the gateway's codes: an exchange that may repeat is a
+// transport error, and any other an authentication failure, which keeps
+// the token endpoint's status.
+func googleCatalogTokenFailure(ctx context.Context, err error) error {
+	classification := core.ClassifyError(err)
+	if classification.Retryable {
+		return catalogFailure(ctx, CatalogCodeTransportError, "Provider credential refresh could not reach the token service.", classification.StatusCode, 0, err)
+	}
+	failure := catalogFailure(ctx, CatalogCodeAuthenticationFailed, "Provider credential refresh failed for catalog access.", classification.StatusCode, 0, err)
+	failure.Class = core.ProviderErrorAuth
+	return failure
 }
 
 // vertexPublisherModels lists a publisher's managed models for the

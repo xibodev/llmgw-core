@@ -110,17 +110,19 @@ func TestGoogleVertexProjectComesFromTheCredential(t *testing.T) {
 }
 
 // Material of another kind is no bearer token, so it is refused rather than
-// sent.
+// sent: AI Studio takes no service-account key, as in the gateway, and
+// neither deployment takes an Anthropic setup token.
 func TestGoogleRefusesCredentialKindsItDoesNotServe(t *testing.T) {
 	t.Parallel()
 	fake, base := newGoogleFake(t, googleAnswer(http.StatusOK, googleHelloAnswer))
-	provider := newGoogleTest(t, GoogleConfig{Deployment: GoogleAIStudio, BaseURL: base})
-	for _, kind := range []string{core.TokenTypeGCPServiceAccount, core.TokenTypeAnthropicSetupToken} {
+	studio := newGoogleTest(t, GoogleConfig{Deployment: GoogleAIStudio, BaseURL: base})
+	vertex := newGoogleTest(t, GoogleConfig{Deployment: GoogleVertexAI, BaseURL: base + "/v1", Project: "p"})
+	for provider, kind := range map[*Google]string{studio: core.TokenTypeGCPServiceAccount, vertex: core.TokenTypeAnthropicSetupToken} {
 		_, err := provider.Invoke(context.Background(), googleChatRequest("gemini-3.5-flash", `{"messages":[]}`,
 			&core.Credential{Token: `{"type":"service_account"}`, TokenType: kind}))
 		var failure *core.ProviderError
 		if !errors.As(err, &failure) || failure.Class != core.ProviderErrorConfiguration || strings.Contains(err.Error(), "service_account\"") {
-			t.Fatalf("kind %s: %v, want a configuration error", kind, err)
+			t.Fatalf("%s with kind %s: %v, want a configuration error", provider.label(), kind, err)
 		}
 	}
 	if calls := fake.take(); len(calls) != 0 {

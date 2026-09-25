@@ -18,10 +18,12 @@ const (
 // a surface is native when a plan under TransportRequirementAny carries it
 // natively, emulated when the plan adapts it, and unknown when it refuses.
 // A row that neither claims chat in LegacyCapabilities nor lists a chat
-// surface classifies nothing. Row is as the list presents it, so a product
-// that infers capabilities or surfaces for presentation passes them in its
-// LegacyCapabilities and SupportedAPIs.
-func ListingSurfaces(provider Provider, row ModelInfo, refreshedAt, evaluatedAt time.Time) (native, emulated, unknown []string) {
+// surface classifies nothing. The row is as the list presents it, so a
+// product that infers capabilities or surfaces for presentation passes them
+// in its LegacyCapabilities and SupportedAPIs. Credential is the one the
+// caller's requests carry.
+func ListingSurfaces(provider Provider, credential *Credential, evidence TransportEvidence, evaluatedAt time.Time) (native, emulated, unknown []string) {
+	row := evidence.Row
 	chat, _ := row.LegacyCapabilities["chat"].(bool)
 	for _, surface := range row.SupportedAPIs {
 		if ParseSurfacePath(surface) != "" {
@@ -32,8 +34,8 @@ func ListingSurfaces(provider Provider, row ModelInfo, refreshedAt, evaluatedAt 
 	if !chat {
 		return nil, nil, nil
 	}
-	capabilities := TransportEvidence{Row: row, RefreshedAt: refreshedAt}.Capabilities()
-	interfaces := TransportInterfaces(provider, row.ID, row.SupportedAPIs)
+	capabilities := evidence.Capabilities()
+	interfaces := TransportInterfaces(provider, credential, row.ID, row.SupportedAPIs)
 	native, emulated, unknown = []string{}, []string{}, []string{}
 	for _, label := range []string{ListingChatCompletions, ListingResponses, ListingMessages} {
 		plan := PlanTransport(TransportPlanRequest{
@@ -61,17 +63,18 @@ const (
 )
 
 // ResponseTransportMode labels the transport of a response an exact target
-// served, as the gateway's X-LLMGW-Transport-Mode does. With row, the
-// target's stored catalog row, it is native when a plan under
-// TransportRequirementAny carries the surface natively. Without one it
-// reports the path the provider takes: native when the provider preserves
-// the surface's wire for model. Anything else is translated.
-func ResponseTransportMode(provider Provider, model string, surface ModelSurface, row *ModelInfo, refreshedAt, evaluatedAt time.Time) string {
-	if row != nil && provider != nil {
+// served a request that carried credential, as the gateway's
+// X-LLMGW-Transport-Mode does. With evidence from the target's stored
+// catalog row, it is native when a plan under TransportRequirementAny
+// carries the surface natively. Without it, it reports the path the
+// provider takes: native when the provider preserves the surface's wire.
+// Anything else is translated.
+func ResponseTransportMode(provider Provider, credential *Credential, model string, surface ModelSurface, evidence *TransportEvidence, evaluatedAt time.Time) string {
+	if evidence != nil && provider != nil {
 		plan := PlanTransport(TransportPlanRequest{
 			Operation: ModelOperationChat, Surface: surface, EvaluatedAt: evaluatedAt, ExactTarget: true,
-			Capabilities: TransportEvidence{Row: *row, RefreshedAt: refreshedAt}.Capabilities(),
-			Interfaces:   TransportInterfaces(provider, model, row.SupportedAPIs),
+			Capabilities: evidence.Capabilities(),
+			Interfaces:   TransportInterfaces(provider, credential, model, evidence.Row.SupportedAPIs),
 			Requirement:  TransportRequirementAny, TranslationEvaluated: true,
 		})
 		if plan.Disposition == TransportNative {
@@ -79,7 +82,7 @@ func ResponseTransportMode(provider Provider, model string, surface ModelSurface
 		}
 		return TransportModeTranslated
 	}
-	if provider != nil && PreservesWire(provider, model, surface) {
+	if provider != nil && PreservesWireFor(provider, credential, model, surface) {
 		return TransportModeNative
 	}
 	return TransportModeTranslated

@@ -74,6 +74,20 @@ func (r *Runtime[S]) changedAt() time.Time {
 	return r.settingsChangedAt
 }
 
+// storedCredential resolves caller's credential as stored, without
+// refreshing it, for a decision that sends nothing.
+func (r *Runtime[S]) storedCredential(ctx context.Context, caller core.Caller, instance string) (string, *core.Credential, error) {
+	key, err := r.credentialKey(ctx, caller, instance)
+	if err != nil || key == "" {
+		return key, nil, err
+	}
+	record, err := r.options.Credentials.Load(ctx, key)
+	if err != nil {
+		return "", nil, credentialUnavailable(err)
+	}
+	return key, core.CredentialFromRecord(key, record), nil
+}
+
 // credentialKey resolves the key of caller's credential without loading or
 // refreshing it. The empty key means the request goes without one.
 func (r *Runtime[S]) credentialKey(ctx context.Context, caller core.Caller, instance string) (string, error) {

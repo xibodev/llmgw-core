@@ -76,7 +76,10 @@ type Zen struct {
 	maxCatalogBytes                  int64
 }
 
-var _ core.Provider = (*Zen)(nil)
+var (
+	_ core.Provider                = (*Zen)(nil)
+	_ core.CredentialWirePreserver = (*Zen)(nil)
+)
 
 // NewZen returns a Zen provider.
 func NewZen(config ZenConfig) (*Zen, error) {
@@ -159,6 +162,30 @@ func (p *Zen) NativeSurfaces(model string) []core.ModelSurface {
 		return []core.ModelSurface{core.ModelSurfaceChatCompletions, core.ModelSurfaceResponses}
 	}
 	return []core.ModelSurface{core.ModelSurfaceChatCompletions}
+}
+
+// PreservesWireFor implements core.CredentialWirePreserver as the gateway
+// declares Zen. Anonymous access reshapes every request for admission, so
+// it preserves nothing. With a key Zen preserves a model's one native
+// surface: the one its catalog row lists when the row lists Chat
+// Completions or Responses but not both, or Responses for a Muse model the
+// catalog lacks.
+func (p *Zen) PreservesWireFor(credential *core.Credential, model string, surface core.ModelSurface) bool {
+	if zenCredential(credential).anonymous {
+		return false
+	}
+	route := p.route(model)
+	if !route.known {
+		return route.responses && surface == core.ModelSurfaceResponses
+	}
+	chat, responses := zenRowSurfaces(route.row)
+	switch {
+	case chat == responses:
+		return false
+	case responses:
+		return surface == core.ModelSurfaceResponses
+	}
+	return surface == core.ModelSurfaceChatCompletions
 }
 
 // zenCall is one operation Zen has checked and is about to send.

@@ -91,7 +91,10 @@ type Copilot struct {
 	routes map[string]copilotRoute
 }
 
-var _ core.Provider = (*Copilot)(nil)
+var (
+	_ core.Provider      = (*Copilot)(nil)
+	_ core.WirePreserver = (*Copilot)(nil)
+)
 
 // NewCopilot returns a Copilot provider.
 func NewCopilot(config CopilotConfig) (*Copilot, error) {
@@ -136,6 +139,20 @@ func (p *Copilot) NativeSurfaces(model string) []core.ModelSurface {
 		return []core.ModelSurface{core.ModelSurfaceChatCompletions, core.ModelSurfaceResponses}
 	}
 	return []core.ModelSurface{core.ModelSurfaceChatCompletions}
+}
+
+// PreservesWire implements core.WirePreserver as the gateway declares
+// Copilot: Chat Completions and Responses travel in their own protocols,
+// except Chat for a model Copilot serves over Responses by default.
+func (p *Copilot) PreservesWire(model string, surface core.ModelSurface) bool {
+	route, known := p.route(model)
+	switch surface {
+	case core.ModelSurfaceChatCompletions:
+		return !p.adapt || !known || route.preferred() != "responses"
+	case core.ModelSurfaceResponses:
+		return known && route.responses()
+	}
+	return false
 }
 
 // Invoke performs one Chat Completions or Responses request. Chat returns

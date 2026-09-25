@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"mime"
 	"slices"
-	"time"
 
 	core "github.com/xibodev/llmgw-core"
 	"github.com/xibodev/llmgw-core/catalog"
@@ -63,7 +62,7 @@ func (r *Runtime[S]) transparent(ctx context.Context, instance string, b binding
 	if !found {
 		return refused
 	}
-	interfaces := core.TransportInterfaces(b.provider, request.Model, row.SupportedAPIs)
+	interfaces := core.TransportInterfaces(b.provider, c.value, request.Model, row.SupportedAPIs)
 	refused.NativeInterface = slices.Contains(interfaces, core.TransportInterface{Surface: request.Surface, Native: core.SupportSupported})
 	plan := core.PlanTransport(core.TransportPlanRequest{
 		Operation: core.ModelOperationChat, Surface: request.Surface, EvaluatedAt: r.options.Now(), ExactTarget: true,
@@ -101,13 +100,14 @@ func (r *Runtime[S]) TransportMode(ctx context.Context, caller core.Caller, inst
 	if err != nil {
 		return core.TransportModeTranslated
 	}
-	var row *core.ModelInfo
-	var refreshedAt time.Time
-	if key, err := r.credentialKey(ctx, caller, instance); err == nil {
-		read := r.catalogs.Cached(ctx, core.CatalogKey{Instance: instance, CredentialKey: key})
-		if found, ok := catalog.Find(read.Record, model); ok {
-			row, refreshedAt = &found, read.Record.Evidence.ObservedAt
-		}
+	key, credential, err := r.storedCredential(ctx, caller, instance)
+	if err != nil {
+		return core.ResponseTransportMode(b.provider, nil, model, surface, nil, r.options.Now())
 	}
-	return core.ResponseTransportMode(b.provider, model, surface, row, refreshedAt, r.options.Now())
+	var evidence *core.TransportEvidence
+	read := r.catalogs.Cached(ctx, core.CatalogKey{Instance: instance, CredentialKey: key})
+	if row, ok := catalog.Find(read.Record, model); ok {
+		evidence = &core.TransportEvidence{Row: row, RefreshedAt: read.Record.Evidence.ObservedAt}
+	}
+	return core.ResponseTransportMode(b.provider, credential, model, surface, evidence, r.options.Now())
 }

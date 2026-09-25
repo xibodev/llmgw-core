@@ -56,10 +56,11 @@ func (e TransportEvidence) Capabilities() ModelCapabilities {
 // transport planning: one for each chat surface in surfaces, the row's
 // SupportedAPIs, that ParseSurfacePath recognizes, in their order. An
 // interface is native when provider preserves the surface's wire for model
-// (see PreservesWire), and adapted otherwise. A surface the row does not
-// list gets no interface, so a request for it is adapted or refused. A nil
-// provider, one that could not be built, offers none.
-func TransportInterfaces(provider Provider, model string, surfaces []string) []TransportInterface {
+// and a request that carries credential (see PreservesWireFor), and
+// adapted otherwise. A surface the row does not list gets no interface, so
+// a request for it is adapted or refused. A nil provider, one that could
+// not be built, offers none.
+func TransportInterfaces(provider Provider, credential *Credential, model string, surfaces []string) []TransportInterface {
 	if provider == nil {
 		return nil
 	}
@@ -70,7 +71,7 @@ func TransportInterfaces(provider Provider, model string, surfaces []string) []T
 			continue
 		}
 		native := SupportUnsupported
-		if PreservesWire(provider, model, surface) {
+		if PreservesWireFor(provider, credential, model, surface) {
 			native = SupportSupported
 		}
 		interfaces = append(interfaces, TransportInterface{Surface: surface, Native: native})

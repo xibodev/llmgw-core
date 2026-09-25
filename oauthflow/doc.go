@@ -43,7 +43,8 @@
 //	          ErrFlowExpired and ErrFlowNotFound are expired
 //	complete  POST .../oauth/complete {flow_id, authorization_response}
 //	          Complete(ctx, caller, flowID, CompleteInput{Code, State}),
-//	          after manualAuthorizationCode splits the pasted value
+//	          after manualAuthorizationCode splits the pasted value;
+//	          ErrStateMismatch leaves the flow pending for another paste
 //	callback  GET /oauth/callback/{provider_id}?code&state
 //	          Callback(ctx, CompleteInput{Code, State, Error,
 //	              RedirectURI: oauthCallbackURL(r, provider_id)})

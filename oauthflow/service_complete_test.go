@@ -59,29 +59,51 @@ func TestCompleteConsumesEvenWhenTheExchangeFails(t *testing.T) {
 	}
 }
 
-func TestCompleteEndsTheFlowOnAMismatchedStateOrADenial(t *testing.T) {
+// A wrong pasted redirect URL spends nothing, as the gateway's
+// TestConsumerManualFlowCreatesProviderOnlyAfterSuccessfulCompletion expects.
+func TestCompleteLeavesTheFlowOnAMismatchedState(t *testing.T) {
 	t.Parallel()
-	for name, input := range map[string]oauthflow.CompleteInput{
-		"mismatched state": {Code: fixtureCode, State: secretState + "-other"},
-		"provider denial":  {Error: "access_denied"},
-	} {
+	for _, method := range []oauthflow.Method{oauthflow.MethodManual, oauthflow.MethodBrowser} {
 		h := newHarness(t)
 		ctx := context.Background()
-		view := h.start(t, oauthflow.MethodManual)
-		ended, err := h.service.Complete(ctx, owner(), view.ID, input)
-		want := oauthflow.ErrStateMismatch
-		if input.Error != "" {
-			want = oauthflow.ErrAccessDenied
+		view := h.start(t, method, oauthflow.WithRedirectURI(fixtureRedirect))
+		wrong := oauthflow.CompleteInput{Code: fixtureCode, State: secretState + "-other"}
+		pending, err := h.service.Complete(ctx, owner(), view.ID, wrong)
+		wantErr(t, err, oauthflow.ErrStateMismatch, string(method)+": mismatched state")
+		if pending.Status != oauthflow.StatusPending || pending.ID != view.ID {
+			t.Fatalf("%s: mismatched state view=%+v", method, pending)
 		}
-		wantErr(t, err, want, name)
-		if ended.Status != oauthflow.StatusFailed {
-			t.Fatalf("%s: view=%+v", name, ended)
+		assertNoSecrets(t, pending)
+		if got, err := h.service.Get(ctx, owner(), view.ID); err != nil || got.Status != oauthflow.StatusPending {
+			t.Fatalf("%s: a mismatched state spent the flow: view=%+v err=%v", method, got, err)
 		}
-		_, err = h.service.Complete(ctx, owner(), view.ID, oauthflow.CompleteInput{Code: fixtureCode, State: stateOf(t, view)})
-		wantErr(t, err, oauthflow.ErrFlowNotFound, name+": retry")
 		if _, exchanges := h.driver.counts(); exchanges != 0 {
-			t.Fatalf("%s: the code was exchanged", name)
+			t.Fatalf("%s: a mismatched state reached the exchange", method)
 		}
+		done, err := h.service.Complete(ctx, owner(), view.ID, oauthflow.CompleteInput{Code: fixtureCode, State: stateOf(t, view)})
+		if err != nil || done.Status != oauthflow.StatusComplete {
+			t.Fatalf("%s: retry with the right state: view=%+v err=%v", method, done, err)
+		}
+		if _, exchanges := h.driver.counts(); exchanges != 1 {
+			t.Fatalf("%s: exchanges=%d, want 1", method, exchanges)
+		}
+	}
+}
+
+func TestCompleteEndsTheFlowOnADenial(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	view := h.start(t, oauthflow.MethodManual)
+	ended, err := h.service.Complete(ctx, owner(), view.ID, oauthflow.CompleteInput{Error: "access_denied"})
+	wantErr(t, err, oauthflow.ErrAccessDenied, "provider denial")
+	if ended.Status != oauthflow.StatusFailed {
+		t.Fatalf("denial view=%+v", ended)
+	}
+	_, err = h.service.Complete(ctx, owner(), view.ID, oauthflow.CompleteInput{Code: fixtureCode, State: stateOf(t, view)})
+	wantErr(t, err, oauthflow.ErrFlowNotFound, "retry after a denial")
+	if _, exchanges := h.driver.counts(); exchanges != 0 {
+		t.Fatal("a denied flow reached the exchange")
 	}
 }
 

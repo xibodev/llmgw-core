@@ -31,10 +31,11 @@ type CompleteInput struct {
 // Complete finishes caller's browser or manual flow with a pasted code, a
 // pasted redirect URL, or a callback the product routed itself.
 //
-// It consumes the flow before anything else can fail, so the code is used at
-// most once even when the exchange fails: a mismatched state, a denial or a
-// failed exchange ends the flow, and the owner starts again. Only an input
-// with neither a code nor an error leaves the flow untouched.
+// Two inputs leave the flow pending, so the owner can paste again: one
+// with neither a code nor an error, and one whose state is not the flow's
+// (ErrStateMismatch). Anything else consumes the flow before the exchange,
+// so the code is used at most once even when the exchange fails: a denial
+// or a failed exchange ends the flow, and the owner starts again.
 func (s *Service) Complete(ctx context.Context, caller core.Caller, id string, input CompleteInput) (View, error) {
 	input = trimInput(input)
 	if input.Code == "" && input.Error == "" {
@@ -92,6 +93,12 @@ func (s *Service) complete(ctx context.Context, flow Flow, input CompleteInput) 
 	if flow.Consumed() {
 		return View{}, ErrFlowNotFound
 	}
+	// A mismatched state spends nothing: it is the owner pasting the wrong
+	// redirect URL, and the gateway lets them try again. A callback found
+	// the flow by this state, so it always matches.
+	if input.State != "" && subtle.ConstantTimeCompare([]byte(flow.Secrets.State), []byte(input.State)) != 1 {
+		return viewOf(flow), ErrStateMismatch
+	}
 	// Resolve the driver before consuming, so a product whose settings no
 	// longer offer the instance does not spend the flow.
 	driver, err := s.driver(flow.Instance, flow.Method)
@@ -107,9 +114,6 @@ func (s *Service) complete(ctx context.Context, flow Flow, input CompleteInput) 
 	}
 	if input.Error != "" {
 		return s.finish(ctx, consumed, OutcomeFailed, ""), ErrAccessDenied
-	}
-	if input.State != "" && subtle.ConstantTimeCompare([]byte(consumed.Secrets.State), []byte(input.State)) != 1 {
-		return s.finish(ctx, consumed, OutcomeFailed, ""), ErrStateMismatch
 	}
 	record, err := driver.(CodeDriver).Exchange(ctx, consumed, input.Code)
 	if err != nil {

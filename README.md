@@ -233,7 +233,8 @@ view, err = svc.Callback(ctx, oauthflow.CompleteInput{Code: code, State: state})
 - `Poll` never asks the provider more often than the flow's interval, even
   across processes, and honours `slow_down`.
 - `Complete` and `Callback` consume the flow before the code exchange, so a
-  code is used at most once even when the exchange fails.
+  code is used at most once even when the exchange fails. A pasted redirect
+  URL whose state does not match spends nothing, so the user can paste again.
 - Verifiers, OAuth states, device codes and tokens stay on the server. The
   returned `View` never holds them.
 - Credentials are saved through `CredentialStore.Save` under a key the product

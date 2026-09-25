@@ -21,7 +21,8 @@ var (
 	// authorization. The flow has ended.
 	ErrAccessDenied = errors.New("oauthflow: authorization was denied")
 	// ErrStateMismatch reports a completion whose OAuth state is not the
-	// flow's. The flow has ended.
+	// flow's. Nothing is spent: the flow stays pending and its owner may
+	// retry with the right redirect URL or code.
 	ErrStateMismatch = errors.New("oauthflow: OAuth state does not match the flow")
 	// ErrWrongMethod reports an operation the flow's method does not offer,
 	// such as polling a browser flow.

@@ -85,6 +85,9 @@ type Options[S any] struct {
 	// Refresh supplies each instance's OAuth refresh. Nil means credentials
 	// never refresh.
 	Refresh RefreshFactory[S]
+	// Policy supplies each instance's retry and circuit policy, which the
+	// Runtime applies to the provider it binds. Nil applies none.
+	Policy PolicyFactory[S]
 	// Catalogs stores discovered catalogs. Nil keeps them in this Runtime's
 	// memory only.
 	Catalogs core.CatalogStore
@@ -117,6 +120,7 @@ type Runtime[S any] struct {
 	coordinators      map[string]*tokenstore.Coordinator
 	health            map[string]core.ProviderHealthEvidence
 	catalogs          *catalog.Service
+	circuits          circuits
 }
 
 var errRefreshUnavailable = errors.New("runtime: this instance has no credential refresh")
@@ -195,7 +199,7 @@ func (r *Runtime[S]) bind(instance string) (binding, error) {
 		if built == nil {
 			return binding{}, core.NewConfigurationError("provider instance "+instance+" is not configured", nil)
 		}
-		provider = built
+		provider = r.resilient(built, instance)
 		r.providers[instance] = provider
 	}
 	if r.options.Credentials == nil {

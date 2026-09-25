@@ -52,8 +52,8 @@ func TestCopilotStreamsChatRecordsAsSent(t *testing.T) {
 	if frames := drainCopilot(t, stream); !reflect.DeepEqual(frames, want) {
 		t.Fatalf("frames = %q\nwant %q", frames, want)
 	}
-	if losses := core.StreamLosses(stream); len(losses) != 6 {
-		t.Fatalf("stream losses = %+v, want the request's six dropped fields", losses)
+	if losses := core.StreamLosses(stream); len(losses) != 4 {
+		t.Fatalf("stream losses = %+v, want the request's four dropped fields", losses)
 	}
 	exchanges, calls := backend.take()
 	if !reflect.DeepEqual(exchanges, []string{"product-oauth"}) || len(calls) != 1 {

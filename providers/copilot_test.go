@@ -13,21 +13,38 @@ import (
 	core "github.com/xibodev/llmgw-core"
 )
 
-// copilotRichChat carries every field the gateway forwards to Copilot and
-// several it drops. copilotRichChatUpstream is what the gateway's own
-// chatKwargs and buildOpenAIPayload send for it: sorted keys, numbers as the
-// gateway renders them, HTML unescaped.
+// copilotRichChat carries every field the gateway's Chat facade forwards to
+// Copilot and several its transport drops. copilotRichChatUpstream is what
+// the gateway's own chatKwargs and buildOpenAIPayload send for it: sorted
+// keys, numbers as the gateway renders them, HTML unescaped. copilotRoutedChat
+// carries the fields the transport forwards besides.
 const (
 	copilotRichChat = `{"model":"ignored","stream":true,"messages":[{"role":"user","content":"Say <b>hello</b> & more"}],` +
 		`"temperature":1.0,"max_tokens":64,"top_p":0.5,"stop":["END"],` +
 		`"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object","properties":{"n":{"type":"integer","maximum":1e3}}}}}],` +
 		`"tool_choice":"auto","metadata":{"client":"fixture"},"reasoning_effort":"low","n":1,"response_format":{"type":"json_object"},` +
-		`"stream_options":{"include_usage":true},"parallel_tool_calls":false,"user":"fixture-user","fallback_timeout_ms":5000,` +
+		`"user":"fixture-user","fallback_timeout_ms":5000,` +
 		`"force_api_support":false,"seed":null}`
 	copilotRichChatUpstream = `{"max_tokens":64,"messages":[{"content":"Say <b>hello</b> & more","role":"user"}],"metadata":{"client":"fixture"},` +
 		`"model":"gpt-fixture","reasoning_effort":"low","stop":["END"],"stream":false,"temperature":1,"tool_choice":"auto",` +
 		`"tools":[{"function":{"name":"lookup","parameters":{"properties":{"n":{"maximum":1000,"type":"integer"}},"type":"object"}},"type":"function"}],"top_p":0.5}`
 	copilotChatAnswer = `{"id":"chatcmpl-fixture","object":"chat.completion","model":"gpt-fixture","choices":[{"index":0,"message":{"role":"assistant","content":"Hello <b>there</b>"},"finish_reason":"stop"}]}`
+	// copilotRoutedChat is the Chat body the gateway's Copilot facade hands
+	// core for a request its router serves over Chat from Responses or
+	// Messages: its transport's payload, with parallel_tool_calls,
+	// stream_options and thinking, and output_config, which that payload
+	// never carried. copilotRoutedChatUpstream is what the gateway's
+	// transport sent for it, recorded from the gateway's own payload builder.
+	copilotRoutedChat = `{"model":"chat-model","stream":false,"messages":[{"role":"user","content":[{"type":"text","text":"Say <b>hi</b> & more"},` +
+		`{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}],"temperature":0.5,"top_p":1.0,"max_tokens":64,"stop":["END"],` +
+		`"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"tool_choice":"auto","metadata":{"client":"fixture"},` +
+		`"reasoning_effort":"low","parallel_tool_calls":false,"stream_options":{"include_usage":true},` +
+		`"thinking":{"type":"enabled","budget_tokens":1024},"output_config":{"effort":"low"},"force_api_support":true}`
+	copilotRoutedChatUpstream = `{"max_tokens":64,"messages":[{"content":[{"text":"Say <b>hi</b> & more","type":"text"},` +
+		`{"image_url":{"url":"data:image/png;base64,AA=="},"type":"image_url"}],"role":"user"}],"metadata":{"client":"fixture"},` +
+		`"model":"chat-model","parallel_tool_calls":false,"reasoning_effort":"low","stop":["END"],"stream":false,` +
+		`"stream_options":{"include_usage":true},"temperature":0.5,"thinking":{"budget_tokens":1024,"type":"enabled"},` +
+		`"tool_choice":"auto","tools":[{"function":{"name":"lookup","parameters":{"type":"object"}},"type":"function"}],"top_p":1}`
 )
 
 func answerCopilotChat(w http.ResponseWriter, _ *http.Request, _ []byte) {
@@ -75,13 +92,43 @@ func TestCopilotShapesChatAsTheGatewayDoes(t *testing.T) {
 	want := []core.Loss{
 		{Path: "fallback_timeout_ms", Class: translate.LossDropped, Severity: translate.LossAdvisory, Detail: "the Copilot transport does not carry this Chat field"},
 		{Path: "n", Class: translate.LossDropped, Severity: translate.LossAdvisory, Detail: "the Copilot transport does not carry this Chat field"},
-		{Path: "parallel_tool_calls", Class: translate.LossDropped, Severity: translate.LossMaterial, Detail: "the Copilot transport does not carry this Chat field"},
 		{Path: "response_format", Class: translate.LossDropped, Severity: translate.LossMaterial, Detail: "the Copilot transport does not carry this Chat field"},
-		{Path: "stream_options", Class: translate.LossDropped, Severity: translate.LossAdvisory, Detail: "the Copilot transport does not carry this Chat field"},
 		{Path: "user", Class: translate.LossDropped, Severity: translate.LossAdvisory, Detail: "the Copilot transport does not carry this Chat field"},
 	}
 	if !reflect.DeepEqual(response.Losses, want) {
 		t.Fatalf("losses = %+v\nwant %+v", response.Losses, want)
+	}
+}
+
+// The gateway's Copilot transport forwards what the OpenAI-compatible
+// transport forwards, so parallel_tool_calls, stream_options and thinking,
+// which the router hands a request it serves over Chat, reach Copilot as that
+// transport sent them, streamed or not. A field it drops is still reported.
+func TestCopilotForwardsTheTransportsChatFields(t *testing.T) {
+	t.Parallel()
+	backend := newCopilotBackend(t, answerCopilotChat)
+	provider := newFixtureCopilot(t, backend)
+	request := copilotRequest(core.ModelSurfaceChatCompletions, "chat-model", copilotRoutedChat, copilotCredential("caller-oauth"))
+	response, err := provider.Invoke(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := provider.Stream(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainCopilot(t, stream)
+	want := []core.Loss{{Path: "output_config", Class: translate.LossDropped, Severity: translate.LossAdvisory, Detail: "the Copilot transport does not carry this Chat field"}}
+	if !reflect.DeepEqual(response.Losses, want) || !reflect.DeepEqual(core.StreamLosses(stream), want) {
+		t.Fatalf("losses = %+v and %+v\nwant %+v", response.Losses, core.StreamLosses(stream), want)
+	}
+	_, calls := backend.take()
+	streamed := strings.Replace(copilotRoutedChatUpstream, `"stream":false`, `"stream":true`, 1)
+	if len(calls) != 2 || calls[0].body != copilotRoutedChatUpstream || calls[1].body != streamed {
+		t.Fatalf("upstream = %+v\nwant %s\nand %s", calls, copilotRoutedChatUpstream, streamed)
+	}
+	for _, call := range calls {
+		assertCopilotHeaders(t, call.header, "session-1", "application/json", true)
 	}
 }
 

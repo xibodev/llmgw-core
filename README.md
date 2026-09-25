@@ -524,11 +524,14 @@ Providers: func(s Settings, instance string) (core.Provider, error) {
   through `Auth`, configured, cached or from the gh CLI; `Auth` caches that
   session on disk when it has a `CacheDir`. A credential without a token is
   a configuration error, and nothing is sent.
-- **Requests** are shaped byte for byte as the gateway shapes them: the
-  Chat fields its facade forwards (`temperature`, `top_p`, `max_tokens`,
-  `max_completion_tokens`, `stop`, `tools`, `tool_choice`, `metadata` and
-  `reasoning_effort`), sent to the API base the session names with the
-  gateway's editor headers. Other fields are dropped and reported as losses.
+- **Requests** are shaped byte for byte as the gateway's Copilot transport
+  shapes them: the Chat fields it forwards, the OpenAI-compatible
+  transport's (`temperature`, `top_p`, `max_tokens`, `max_completion_tokens`,
+  `stop`, `tools`, `tool_choice`, `reasoning_effort`, `stream_options`,
+  `metadata`, `parallel_tool_calls` and `thinking`), sent to the API base the
+  session names with the gateway's editor headers. Chat served over
+  Responses converts only the fields the gateway's Chat facade forwards.
+  Other fields are dropped and reported as losses.
 - **Surfaces.** Chat Completions is native for every model and streams.
   Responses is native for a model whose catalog row lists it, so list the
   models first. Chat for a row that lists only Responses is served over

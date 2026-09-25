@@ -32,21 +32,10 @@ type copilotChat struct {
 // max_completion_tokens unless the request limits its output already.
 const copilotOutputLimit = "_max_output_tokens"
 
-// copilotChatField reports a Chat field the gateway sends Copilot: its Chat
-// facade forwards these, and its transport sends each that is not null.
-func copilotChatField(field string) bool {
-	switch field {
-	case "temperature", "top_p", "max_tokens", "max_completion_tokens", "stop",
-		"tools", "tool_choice", "metadata", "reasoning_effort":
-		return true
-	}
-	return false
-}
-
-// prepareChat shapes a Chat request exactly as the gateway does. It sends
-// the messages and the fields copilotChatField names, and drops every other
-// field, reporting it at its path: advisory, or material for a field that
-// changes the answer's structure, as the Codex policy classifies them. The
+// prepareChat shapes a Chat request exactly as the gateway's Copilot
+// transport does. It sends the messages and the fields that transport
+// forwards, the OpenAI-compatible transport's openAIChatForwarded, and drops
+// every other field, reporting it at its path; see copilotDropped. The
 // gateway drops those too, so the request is still served.
 //
 // With adaptation on, a model whose catalog row lists Responses but not
@@ -84,17 +73,10 @@ func (p *Copilot) prepareChat(request core.Request, stream bool) (copilotChat, e
 		value := body[field]
 		switch {
 		case value == nil, field == "model", field == "stream", field == "messages", field == "force_api_support", field == copilotOutputLimit:
-		case copilotChatField(field):
+		case openAIChatForwarded(field):
 			options[field] = value
 		default:
-			severity := translate.LossAdvisory
-			if structuralChatField(field) && !chatFieldDefault(field, value) {
-				severity = translate.LossMaterial
-			}
-			losses = append(losses, core.Loss{
-				Path: field, Class: translate.LossDropped, Severity: severity,
-				Detail: "the Copilot transport does not carry this Chat field",
-			})
+			losses = append(losses, copilotDropped(field, value, "the Copilot transport does not carry this Chat field"))
 		}
 	}
 	if limit := body[copilotOutputLimit]; limit != nil && options["max_tokens"] == nil && options["max_completion_tokens"] == nil {
@@ -117,7 +99,9 @@ func (p *Copilot) prepareChat(request core.Request, stream bool) (copilotChat, e
 }
 
 // copilotChatOverResponses converts a Chat request into the Responses
-// request that serves it, as the gateway's adaptation does. The conversion's
+// request that serves it, as the gateway's adaptation does. As in
+// OpenAICompatible, only the fields the gateway's Chat facade forwards are
+// converted, and the others are dropped and reported. The conversion's
 // material losses refuse it before anything is sent, Gemini thought
 // signatures excepted, and its other findings are reported.
 func copilotChatOverResponses(model string, messages []any, options map[string]any, marked bool, losses []core.Loss) (copilotChat, error) {
@@ -125,7 +109,15 @@ func copilotChatOverResponses(model string, messages []any, options map[string]a
 	if err != nil {
 		return copilotChat{}, copilotInvalid("Chat messages must be an array of objects", err)
 	}
-	converted := translate.ChatToResponsesWithReport(model, history, options, false)
+	fields := make(map[string]any, len(options))
+	for _, field := range slices.Sorted(maps.Keys(options)) {
+		if openAIChatFacadeField(field) {
+			fields[field] = options[field]
+		} else {
+			losses = append(losses, copilotDropped(field, options[field], "Chat served over Responses does not carry this field"))
+		}
+	}
+	converted := translate.ChatToResponsesWithReport(model, history, fields, false)
 	conversion := exemptThoughtSignatures(converted.Report.Losses)
 	if err := translate.RejectMaterialLoss(translate.Report{Losses: conversion}); err != nil {
 		return copilotChat{}, copilotUnsupported("the Chat request cannot be served over Copilot's Responses endpoint", err)
@@ -134,6 +126,17 @@ func copilotChatOverResponses(model string, messages []any, options map[string]a
 		payload: converted.Value, responses: true, vision: copilotResponsesImages(converted.Value["input"]),
 		marked: marked, losses: translate.NewReport(append(losses, conversion...)...).Losses,
 	}, nil
+}
+
+// copilotDropped reports a Chat field Copilot is not sent: advisory, or
+// material for a field that changes the answer's structure, as the Codex
+// policy classifies them.
+func copilotDropped(field string, value any, detail string) core.Loss {
+	severity := translate.LossAdvisory
+	if structuralChatField(field) && !chatFieldDefault(field, value) {
+		severity = translate.LossMaterial
+	}
+	return core.Loss{Path: field, Class: translate.LossDropped, Severity: severity, Detail: detail}
 }
 
 // copilotPayload decodes the JSON object body. Numbers decode as the

@@ -145,6 +145,10 @@ Products supply three stores, each with an in-memory reference implementation:
 - **`CatalogStore`** keeps discovered catalogs, with a new revision on every save.
   `Save` must be atomic for readers in any process. Run `catalogtest.Run`
   against every implementation. Reference: `NewMemoryCatalogStore`.
+  - A `ConditionalCatalogStore` adds `SaveIf(ctx, key, evidence, expected)`
+    and `Delete`, so a discovery fences out an invalidation in any process.
+    `Delete` leaves the key a new revision, which `Load` returns with
+    `ErrCatalogNotFound`. `catalogtest.Run` checks both when present.
 - **`EvidenceSink`** receives `AccountEvidence`: which credential served which
   operation, and the classified outcome. Reference: `MemoryEvidenceSink`.
 
@@ -248,6 +252,52 @@ translating through llm-translate:
 - Messages over Chat Completions, streaming included.
 - Chat Completions over Responses.
 - Responses over Chat Completions.
+
+### Catalogs
+
+`catalog.Service` keeps catalogs as the gateway does, as instance state over
+a `CatalogStore`. A Runtime builds one from `Catalogs` and `CatalogTTL` that
+behaves as `ListModels` always has; pass `Options.CatalogService` to choose:
+
+```go
+catalogs := catalog.New(catalog.Options{
+    Store: store, TTL: time.Hour, KeepStale: true, SchemaVersion: 6,
+    InstanceTTL: func(instance string) time.Duration { return 0 }, // 0: use TTL
+})
+```
+
+- **Reads.** `Read` serves a catalog younger than the TTL, or discovers it and
+  returns what is stored afterwards. `Cached` and `CachedLookup` never discover.
+  With `KeepStale`, a failed discovery keeps the stored rows, marked stale.
+- **Fences.** `Invalidate(ctx, key, catalog.Hard)` forgets a catalog and fences
+  every discovery in flight, so a revoked credential's rows never come back.
+  `catalog.Soft` forgets without fencing the operation that caused it.
+- **Diagnostics** report synced, not_synced, empty or error, stale and
+  from_cache, and never quote an error.
+- **Schema.** `CatalogEvidence.SchemaVersion` stamps what a service stores; rows
+  stamped otherwise are neither served nor kept.
+
+The Runtime adds `ReadCatalog` (diagnostics), `CachedCatalog`, `CachedModel`
+for catalog hooks such as `ZenConfig.Models`, and `CatalogService`.
+
+### Transport planning
+
+The gateway's transport-mode decisions, as pure helpers over `PlanTransport`:
+
+- `TransportEvidence{Row, RefreshedAt}.Capabilities()` gives a row the catalog's
+  freshness, an hour by default, without upgrading its confidence.
+- `TransportInterfaces` offers the chat surfaces a row lists, native where
+  `PreservesWireFor` says the provider preserves the wire for the credential.
+  A `CredentialWirePreserver` answers per credential: anonymous Zen preserves
+  nothing. Codex preserves Responses, Copilot Chat and listed Responses.
+- `ParseSurfacePath`, `ParseTransportRequirement`, `ListingSurfaces` and
+  `ResponseTransportMode` port the path and header parsing, the model list's
+  native and emulated surfaces, and the response label.
+
+`Runtime.Transparent` sends the body as is, once, only when a transparent plan
+over the caller's stored catalog confirms it, and refuses a stream after that.
+A refusal is a `*core.TransportRejectError`; each product words it.
+`Runtime.TransportMode` labels a response.
 
 ### Loss policy
 

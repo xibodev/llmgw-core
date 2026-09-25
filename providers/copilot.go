@@ -18,8 +18,12 @@ import (
 const (
 	copilotDefaultIntegrationID = "vscode-chat"
 	copilotDefaultEditorVersion = "vscode/1.95.3"
-	copilotDefaultTimeout       = 300 * time.Second
-	copilotCatalogTimeout       = 10 * time.Second
+)
+
+// The gateway's default Copilot timeout, and its bound on a catalog request.
+const (
+	copilotDefaultTimeout = 300 * time.Second
+	copilotCatalogTimeout = 10 * time.Second
 )
 
 // CopilotConfig configures Copilot. Auth, EditorPluginVersion and UserAgent
@@ -32,8 +36,10 @@ type CopilotConfig struct {
 	// error unless its AllowProxy setting is on.
 	Auth *copilotauth.Client
 	// IntegrationID and EditorVersion identify the editor integration in the
-	// Copilot-Integration-Id and Editor-Version headers. Empty fields use the
-	// gateway's defaults, vscode-chat and vscode/1.95.3.
+	// Copilot-Integration-Id and Editor-Version headers of API requests.
+	// Empty fields use the gateway's defaults, vscode-chat and vscode/1.95.3.
+	// The session exchange presents Auth's own editor identity, which the
+	// gateway leaves at llm-provider-auth's defaults.
 	IntegrationID string
 	EditorVersion string
 	// EditorPluginVersion and UserAgent name the product making the call, so
@@ -64,10 +70,12 @@ type CopilotConfig struct {
 // product's own token through Auth. A credential without a token is a
 // configuration error, and nothing is sent.
 //
-// Chat Completions is native for every model and streams. Responses is
-// native for a model whose catalog row lists a Responses endpoint, as the
-// gateway decides, so list the models first; a translation.Adapter serves
-// Responses for the rest over Chat, and Messages over Chat for all.
+// Chat Completions is native for every model and streams; for a model whose
+// catalog row lists only Responses, Copilot serves Chat over Responses
+// itself, as the gateway's adaptation does. Responses is native for a model
+// whose catalog row lists a Responses endpoint, as the gateway decides, so
+// list the models first; a translation.Adapter serves Responses for the rest
+// over Chat, and Messages over Chat for all.
 //
 // Copilot rejecting a session with 401 is retried once with a new session.
 // A second 401, or GitHub rejecting the OAuth token itself, fails with

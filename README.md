@@ -730,6 +730,86 @@ Providers: func(s Settings, instance string) (core.Provider, error) {
   diagnostic is the gateway's own message, redacted. An empty answer names
   its reason, such as reasoning that spent all of `max_tokens`.
 
+## Ollama
+
+`providers.Ollama` is the Ollama vertical: a keyless daemon over its native
+`/api/chat`, and its `/api/tags` catalog.
+
+```go
+Providers: func(s Settings, instance string) (core.Provider, error) {
+    ollama, err := providers.NewOllama(providers.OllamaConfig{
+        BaseURL: s.OllamaBaseURL, // the daemon root; empty is http://127.0.0.1:11434
+    })
+    if err != nil {
+        return nil, err // a base OllamaBaseURLIssue objects to, such as .../v1
+    }
+    return translation.Adapter{Provider: ollama}, nil // Messages and Responses over Chat
+},
+```
+
+- **Base URL.** `OllamaBaseURLIssue` is the gateway's diagnostic: the base
+  is the daemon's native root, not its OpenAI-compatible `/v1` URL.
+  `NewOllama` refuses a base it objects to.
+- **Requests** are converted to `/api/chat` byte for byte as the gateway
+  converts them: the messages, `temperature`, `top_p`, `tools`, and
+  `max_tokens` as `num_predict`. Other fields are dropped and reported as
+  losses. The gateway's quirks stay: a developer message is sent as a system
+  one, an empty message is dropped, and content that is not a string is sent
+  as Go prints it, so an image never reaches the model as an image. Such
+  content is reported as a material loss at its path, as is each part of it
+  that is not text, such as an image.
+- **Answers.** A reply becomes a Chat completion with usage from Ollama's
+  evaluation counts, and a stream becomes Chat chunks ending in `[DONE]`,
+  each as the gateway renders it. A stream reports its losses through
+  `core.LossReporter`.
+- **Catalog.** `ListModels` names each row by its name, or else its model,
+  with its `details.family` as the vendor. Ollama reports no surfaces or
+  capabilities.
+- **Errors** are `*core.ProviderError`, classified by the gateway's status
+  set with `Retry-After`. A stream that breaks off may be repeated, as in
+  the gateway.
+
+## Edge TTS
+
+`providers.EdgeTTS` is the vertical for the speech service behind Microsoft
+Edge's read-aloud feature, on the `audio_speech` surface. Core has no
+websocket client, so the product supplies the dialer.
+
+```go
+type WebSocketDialer func(ctx context.Context, url string, header http.Header, subprotocols []string) (WebSocketConn, *http.Response, error)
+type WebSocketConn interface {
+    WriteText(ctx context.Context, data []byte) error
+    Read(ctx context.Context) (messageType int, data []byte, err error)
+    Close() error
+}
+
+speech, err := providers.NewEdgeTTS(providers.EdgeTTSConfig{Dial: dial}) // Dial is required
+```
+
+- **Dialer.** Over gorilla/websocket it is a `Dialer` with the given
+  `Subprotocols`, and a connection whose `WriteText` is
+  `WriteMessage(websocket.TextMessage, data)` and whose `Read` is
+  `ReadMessage`, each applying the context's deadline. A refused handshake
+  returns its response, whose `Date` teaches the clock skew. `Close` must be
+  safe to call concurrently with the other methods.
+- **Requests.** `Invoke` takes an OpenAI speech request and answers with
+  `audio/mpeg`. The model names the voice, and `default` the configured
+  default voice; a body `voice` naming another is reported as a loss, not
+  read. `speed` becomes the prosody rate as the gateway maps it, and a
+  `response_format` other than mp3 is refused. `Synthesize` takes a voice,
+  text and rate, as the gateway's speech endpoint calls its synthesizer.
+- **Frames** are the gateway's byte for byte: the speech configuration, then
+  SSML with the text cleaned, escaped and split into 4096-byte messages,
+  each over its own connection signed with `Sec-MS-GEC`. A voice or rate the
+  SSML cannot carry is refused, and a chunk never ends inside a character.
+  A 403 teaches the instance its clock skew, and the dial is retried once.
+- **Credential.** Optional. An API key, or a token, is the access token;
+  without one the read-aloud feature's public token is sent.
+- **Catalog.** `ListModels` lists the voices, each a Microsoft model serving
+  `/v1/audio/speech`. A list that cannot be read is a catalog failure.
+- **Errors** are `*core.ProviderError`. A refused handshake carries its
+  status, and no error quotes the signed URL.
+
 ## Execution
 
 `execution` holds the primitives failover is built from. Endpoints, policy

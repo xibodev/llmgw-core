@@ -106,3 +106,31 @@ func assertCopilotHeaders(t *testing.T, header http.Header, session, accept stri
 		t.Fatalf("headers = %v\nwant %v", got, want)
 	}
 }
+
+// A translation.Adapter leaves a Responses request's max_output_tokens in
+// the Chat body where llm-translate carries it, and the gateway sends it as
+// max_completion_tokens unless the request limits its output already.
+func TestCopilotSendsATranslatedOutputLimitAsTheGatewayDoes(t *testing.T) {
+	t.Parallel()
+	backend := newCopilotBackend(t, answerCopilot(t))
+	provider := listedCopilot(t, backend)
+	for _, testCase := range []struct{ model, body, want string }{
+		{"gpt-fixture", `{"messages":[],"_max_output_tokens":64}`, `{"max_completion_tokens":64,"messages":[],"model":"gpt-fixture","stream":false}`},
+		{"gpt-fixture", `{"messages":[],"_max_output_tokens":64,"max_tokens":32}`, `{"max_tokens":32,"messages":[],"model":"gpt-fixture","stream":false}`},
+		{"copilot-fixture-codex", `{"messages":[{"role":"user","content":"hi"}],"_max_output_tokens":64}`,
+			`{"input":[{"content":"hi","role":"user"}],"max_output_tokens":64,"model":"copilot-fixture-codex"}`},
+	} {
+		response, err := provider.Invoke(context.Background(), copilotRequest(core.ModelSurfaceChatCompletions, testCase.model, testCase.body, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, calls := backend.take(); len(calls) != 1 || calls[0].body != testCase.want {
+			t.Fatalf("%s: upstream = %+v, want %s", testCase.body, calls, testCase.want)
+		}
+		for _, loss := range response.Losses {
+			if loss.Path == copilotOutputLimit {
+				t.Fatalf("%s: the output limit was reported as a loss", testCase.body)
+			}
+		}
+	}
+}

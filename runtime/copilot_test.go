@@ -253,11 +253,14 @@ func TestRuntimeServesTheCopilotVertical(t *testing.T) {
 	})
 
 	t.Run("responses through the adapter for a model it does not", func(t *testing.T) {
-		response, err := runtime.Invoke(ctx, owner, "copilot", request(core.ModelSurfaceResponses, "legacy-fixture", `{"model":"legacy-fixture","stream":false,"input":"Say hello"}`))
+		response, err := runtime.Invoke(ctx, owner, "copilot", request(core.ModelSurfaceResponses, "legacy-fixture",
+			`{"model":"legacy-fixture","stream":false,"input":"Say hello","max_output_tokens":64}`))
 		if err != nil || !strings.Contains(string(response.Body), `"text":"Hello from copilot"`) {
 			t.Fatalf("response = %s err = %v", response.Body, err)
 		}
-		legacy := strings.Replace(chatUpstream, "gpt-fixture", "legacy-fixture", 1)
+		// The gateway sends a Responses request's output limit to a Chat
+		// model as max_completion_tokens.
+		legacy := `{"max_completion_tokens":64,"messages":[{"content":"Say hello","role":"user"}],"model":"legacy-fixture","stream":false}`
 		assertCopilotUpstream(t, upstream, nil, copilotAPICall{path: "/chat/completions", authorization: session, body: legacy})
 	})
 

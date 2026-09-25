@@ -26,6 +26,12 @@ type copilotChat struct {
 	losses []core.Loss
 }
 
+// copilotOutputLimit is where llm-translate carries a Responses request's
+// max_output_tokens when it converts the request to Chat, and so where a
+// translation.Adapter leaves it in the Chat body. The gateway sends it as
+// max_completion_tokens unless the request limits its output already.
+const copilotOutputLimit = "_max_output_tokens"
+
 // copilotChatField reports a Chat field the gateway sends Copilot: its Chat
 // facade forwards these, and its transport sends each that is not null.
 func copilotChatField(field string) bool {
@@ -77,7 +83,7 @@ func (p *Copilot) prepareChat(request core.Request, stream bool) (copilotChat, e
 	for _, field := range slices.Sorted(maps.Keys(body)) {
 		value := body[field]
 		switch {
-		case value == nil, field == "model", field == "stream", field == "messages", field == "force_api_support":
+		case value == nil, field == "model", field == "stream", field == "messages", field == "force_api_support", field == copilotOutputLimit:
 		case copilotChatField(field):
 			options[field] = value
 		default:
@@ -90,6 +96,9 @@ func (p *Copilot) prepareChat(request core.Request, stream bool) (copilotChat, e
 				Detail: "the Copilot transport does not carry this Chat field",
 			})
 		}
+	}
+	if limit := body[copilotOutputLimit]; limit != nil && options["max_tokens"] == nil && options["max_completion_tokens"] == nil {
+		options["max_completion_tokens"] = limit
 	}
 	route, known := p.route(request.Model)
 	if adapt && known && route.preferred() == "responses" {

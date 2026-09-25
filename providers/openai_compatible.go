@@ -67,9 +67,9 @@ type OpenAICompatibleConfig struct {
 
 // OpenAICompatible implements core.Provider for an upstream that speaks the
 // OpenAI wire: the gateway's openai_compatible, openai and litellm
-// instances, and the anonymous catalogs the registry curates. It is the
-// gateway's OpenAI transport without its OpenCode Zen and GitHub Copilot
-// branches, which Zen and Copilot own.
+// instances, the anonymous catalogs the registry curates, and, through
+// NewBedrock, Amazon Bedrock. It is the gateway's OpenAI transport without
+// its OpenCode Zen and GitHub Copilot branches, which Zen and Copilot own.
 //
 // Chat Completions is native for every model, and Responses for a model
 // whose catalog row lists it or that the openai registry entry serves. A

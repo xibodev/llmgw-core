@@ -672,6 +672,64 @@ return translation.Adapter{Provider: provider}, nil // Messages and Responses ov
   gateway's: `authentication_failed` for a rejected key and
   `not_discoverable` for any other.
 
+## Google
+
+`providers.Google` is the Gemini vertical for both of Google's deployments,
+AI Studio and Vertex AI, over their native `generateContent` API: Chat,
+embeddings, image generation, the catalog and what its rows mean, and the
+credential each deployment takes. Requests are shaped byte for byte as the
+gateway shapes them.
+
+```go
+Providers: func(s Settings, instance string) (core.Provider, error) {
+    google, err := providers.NewGoogle(providers.GoogleConfig{
+        Deployment:  providers.GoogleVertexAI, // or providers.GoogleAIStudio
+        Project:     s.VertexProject,          // optional: a key names its own
+        Location:    s.VertexLocation,         // optional: "global"
+        RequestType: s.VertexRequestType,      // optional: "paygo" or "dedicated"
+    })
+    if err != nil {
+        return nil, err
+    }
+    return translation.Adapter{Provider: google}, nil // Messages and Responses over Chat
+},
+```
+
+- **Credential.** An API key travels in `x-goog-api-key`, never in a URL,
+  and a token is the bearer. On Vertex AI a credential of kind
+  `core.TokenTypeGCPServiceAccount` holds a service-account key in `Token`.
+  Each instance exchanges it for cloud-platform tokens and caches them
+  until shortly before they expire, sharing them with no other instance.
+  The key's project fills an unset `Project` and must match a set one; a
+  project the credential's metadata names under
+  `core.CredentialMetadataProjectID` bills calls to it instead. Vertex AI
+  without a credential is a configuration error and sends nothing, while
+  AI Studio sends what it has, as the gateway does. Other credential kinds
+  are refused.
+- **Surfaces.** Chat Completions and embeddings, for every model. Chat is
+  converted to Gemini `contents` with the gateway's mapping: each message's
+  string content, system and developer text as `systemInstruction`,
+  `max_tokens` and `temperature`. Every other field is dropped and reported
+  as a loss, a material one for tools, for content that is not text and
+  for fields that change the answer's structure. Embeddings embed each
+  input with one call, and refuse `dimensions` and encodings other than
+  float, as the gateway does. `GenerateImages` implements
+  `core.ImageGenerator`. As in the gateway, Google does not stream: `Stream`
+  refuses and permits failover. Video generation is not served yet.
+- **Catalog.** AI Studio's catalog is paged, and a model's
+  `supportedGenerationMethods` say what it serves. Vertex AI lists the
+  managed models of the instance's location on its v1beta1 publisher
+  route, which only an OAuth principal may read: with an API key alone the
+  catalog fails with `CatalogCodeNotDiscoverable`, and without a project
+  with `CatalogCodeConfigurationIncomplete`. A walk is bounded at 100
+  pages and 20,000 rows. Rows carry the gateway's legacy capabilities and
+  the typed capabilities it infers from them.
+- **Errors** are `*core.ProviderError`, classified by the gateway's status
+  set. A refusal names the cause Google's error envelope gives, such as
+  exhausted billing or a model the project cannot use, and its cause's
+  diagnostic is the gateway's own message, redacted. An empty answer names
+  its reason, such as reasoning that spent all of `max_tokens`.
+
 ## Execution
 
 `execution` holds the primitives failover is built from. Endpoints, policy

@@ -1,0 +1,49 @@
+[
+  {
+    "id": "codex-fixture-large",
+    "object": "model",
+    "created": 0,
+    "owned_by": "openai",
+    "description": "Synthetic row carrying every optional field",
+    "api_eligible": true,
+    "api_visibility": "list",
+    "supported_apis": ["/responses"],
+    "capabilities": {
+      "schema_version": 1,
+      "operations": {"chat": "supported", "embeddings": "unknown", "image": "unknown", "audio_in": "unknown", "audio_out": "unknown", "video": "unknown", "token_count": "unknown"},
+      "surfaces": {"chat_completions": "unsupported", "responses": "supported", "messages": "unknown"},
+      "inputs": {"text": "unknown", "image": "unknown"},
+      "tools": "unknown",
+      "reasoning": "unknown",
+      "structured_output": "unknown",
+      "streaming": "supported",
+      "stateful_responses": "unknown",
+      "limits": {},
+      "provenance": {"source": "upstream_reported", "confidence": "high"},
+      "freshness": {"discovered_at": "2026-09-21T12:00:00Z", "expires_at": "2026-09-21T13:00:00Z"}
+    }
+  },
+  {
+    "id": "codex-fixture-small",
+    "object": "model",
+    "created": 0,
+    "owned_by": "openai",
+    "api_eligible": true,
+    "api_visibility": "list",
+    "supported_apis": ["/responses"],
+    "capabilities": {
+      "schema_version": 1,
+      "operations": {"chat": "supported", "embeddings": "unknown", "image": "unknown", "audio_in": "unknown", "audio_out": "unknown", "video": "unknown", "token_count": "unknown"},
+      "surfaces": {"chat_completions": "unsupported", "responses": "supported", "messages": "unknown"},
+      "inputs": {"text": "unknown", "image": "unknown"},
+      "tools": "unknown",
+      "reasoning": "unknown",
+      "structured_output": "unknown",
+      "streaming": "supported",
+      "stateful_responses": "unknown",
+      "limits": {},
+      "provenance": {"source": "upstream_reported", "confidence": "high"},
+      "freshness": {"discovered_at": "2026-09-21T12:00:00Z", "expires_at": "2026-09-21T13:00:00Z"}
+    }
+  }
+]

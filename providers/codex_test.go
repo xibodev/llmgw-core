@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -207,7 +208,7 @@ func TestCodexCompleteResponsesAcceptsMissingStreamingContentType(t *testing.T) 
 func TestCodexResponsesRejectsUnsupportedExecutionModes(t *testing.T) {
 	provider, err := NewCodexProvider(CodexProviderConfig{
 		SessionSource: NewCodexTokenSessionSource(auth.NewStaticTokenSource(&auth.Token{AccessToken: "fixture"}), ""),
-		Instructions:  "Required instructions", ResponsesURL: "http://unused",
+		Instructions:  "Required instructions", ResponsesURL: "http://unused", ClientVersion: fixtureCodexClientVersion,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -246,7 +247,7 @@ func TestCodexHTTPErrorExposesOnlyStructuredIdentifiers(t *testing.T) {
 func TestCodexRejectsUnprovenTools(t *testing.T) {
 	provider, err := NewCodexProvider(CodexProviderConfig{
 		SessionSource: NewCodexTokenSessionSource(auth.NewStaticTokenSource(&auth.Token{AccessToken: "fixture"}), ""),
-		Instructions:  "Required instructions", ResponsesURL: "http://unused",
+		Instructions:  "Required instructions", ResponsesURL: "http://unused", ClientVersion: fixtureCodexClientVersion,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -359,10 +360,10 @@ func TestCodexStreamExposesDeltasToolsReasoningAndUsage(t *testing.T) {
 
 func TestCodexRejectsUnsupportedFieldsAndRequiresInstructions(t *testing.T) {
 	source := NewCodexTokenSessionSource(auth.NewStaticTokenSource(&auth.Token{AccessToken: "fixture"}), "")
-	if _, err := NewCodexProvider(CodexProviderConfig{SessionSource: source}); err == nil {
+	if _, err := NewCodexProvider(CodexProviderConfig{SessionSource: source, ClientVersion: fixtureCodexClientVersion}); err == nil {
 		t.Fatal("empty instructions accepted")
 	}
-	provider, err := NewCodexProvider(CodexProviderConfig{SessionSource: source, Instructions: "required", ResponsesURL: "http://unused"})
+	provider, err := NewCodexProvider(CodexProviderConfig{SessionSource: source, Instructions: "required", ResponsesURL: "http://unused", ClientVersion: fixtureCodexClientVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,6 +384,30 @@ func TestCodexRejectsUnsupportedFieldsAndRequiresInstructions(t *testing.T) {
 		if !errors.As(err, &invocation) || !strings.Contains(err.Error(), "unsupported field") {
 			t.Fatalf("unsupported Responses field %q error = %T %v", field, err, err)
 		}
+	}
+}
+
+func TestCodexRequiresClientVersionAndSendsItToTheCatalog(t *testing.T) {
+	source := NewCodexTokenSessionSource(auth.NewStaticTokenSource(&auth.Token{AccessToken: "fixture"}), "")
+	for _, version := range []string{"", " \t"} {
+		_, err := NewCodexProvider(CodexProviderConfig{SessionSource: source, Instructions: "required", ClientVersion: version})
+		if err == nil || err.Error() != "Codex client version is required" {
+			t.Fatalf("client version %q: err = %v", version, err)
+		}
+	}
+
+	queries := make(chan url.Values, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries <- r.URL.Query()
+		_, _ = io.WriteString(w, `{"models":[]}`)
+	}))
+	defer server.Close()
+	provider := newFixtureCodexProvider(t, server, "required")
+	if _, err := provider.ListModels(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := (<-queries)["client_version"]; len(got) != 1 || got[0] != fixtureCodexClientVersion {
+		t.Fatalf("catalog client_version = %q, want %q", got, fixtureCodexClientVersion)
 	}
 }
 
@@ -484,11 +509,14 @@ func TestCodexCancellationAndRetryAfter(t *testing.T) {
 	}
 }
 
+const fixtureCodexClientVersion = "fixture-client/1.0"
+
 func newFixtureCodexProvider(t *testing.T, server *httptest.Server, instructions string) *CodexProvider {
 	t.Helper()
 	provider, err := NewCodexProvider(CodexProviderConfig{
 		SessionSource: NewCodexTokenSessionSource(auth.NewStaticTokenSource(&auth.Token{AccessToken: "caller-token", TokenType: "Bearer"}), "account-fixture"),
 		Instructions:  instructions, ResponsesURL: server.URL + "/responses", ModelsURL: server.URL + "/models", Client: server.Client(),
+		ClientVersion: fixtureCodexClientVersion,
 	})
 	if err != nil {
 		t.Fatal(err)

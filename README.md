@@ -20,6 +20,15 @@ Headless, embeddable LLM routing engine and resilient multi-provider proxy for G
 go get github.com/xibodev/llmgw-core
 ```
 
+### Dependencies
+
+- **llm-provider-auth v0.6.0.** Its `codex` package no longer supplies a
+  client version, so `providers.NewCodexProvider` requires
+  `CodexProviderConfig.ClientVersion`, the version of the product making the
+  call, and returns an error when it is blank. The provider sends it to the
+  Codex catalog as `client_version`. `ResponsesURL` and `ModelsURL` still
+  default to the canonical Codex endpoints.
+
 ## Quick Start (Embedded in 15 Lines)
 
 ```go

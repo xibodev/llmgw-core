@@ -65,8 +65,13 @@ func NewCodexTokenSessionSource(source auth.TokenSource, accountID string) Codex
 type CodexProviderConfig struct {
 	SessionSource CodexSessionSource
 	Instructions  string
-	ResponsesURL  string
-	ModelsURL     string
+	// ResponsesURL and ModelsURL default to llm-provider-auth's canonical
+	// Codex endpoints.
+	ResponsesURL string
+	ModelsURL    string
+	// ClientVersion is sent to the Codex catalog as client_version. It is
+	// required because it names the product making the call, so no library
+	// can supply an honest default.
 	ClientVersion string
 	Client        *http.Client
 	Now           func() time.Time
@@ -90,6 +95,9 @@ func NewCodexProvider(config CodexProviderConfig) (*CodexProvider, error) {
 	if strings.TrimSpace(config.Instructions) == "" {
 		return nil, fmt.Errorf("Codex instructions are required")
 	}
+	if strings.TrimSpace(config.ClientVersion) == "" {
+		return nil, fmt.Errorf("Codex client version is required")
+	}
 	responsesURL := strings.TrimRight(config.ResponsesURL, "/")
 	if responsesURL == "" {
 		responsesURL = strings.TrimRight(codexauth.ResponsesBaseURL, "/") + "/responses"
@@ -97,10 +105,6 @@ func NewCodexProvider(config CodexProviderConfig) (*CodexProvider, error) {
 	modelsURL := config.ModelsURL
 	if modelsURL == "" {
 		modelsURL = codexauth.ModelsURL
-	}
-	clientVersion := config.ClientVersion
-	if clientVersion == "" {
-		clientVersion = codexauth.ClientVersion
 	}
 	client := config.Client
 	if client == nil {
@@ -113,7 +117,7 @@ func NewCodexProvider(config CodexProviderConfig) (*CodexProvider, error) {
 	return &CodexProvider{
 		sessions: config.SessionSource, instructions: config.Instructions,
 		responsesURL: responsesURL, modelsURL: modelsURL,
-		clientVersion: clientVersion, client: client, now: now,
+		clientVersion: config.ClientVersion, client: client, now: now,
 	}, nil
 }
 
@@ -189,9 +193,7 @@ func (p *CodexProvider) ListModels(ctx context.Context, _ *core.Credential) ([]c
 		return nil, &CatalogError{Code: "invalid_endpoint", Detail: "Codex catalog endpoint is invalid", Cause: err}
 	}
 	query := endpoint.Query()
-	if p.clientVersion != "" {
-		query.Set("client_version", p.clientVersion)
-	}
+	query.Set("client_version", p.clientVersion)
 	endpoint.RawQuery = query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {

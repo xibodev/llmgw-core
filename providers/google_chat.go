@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -44,6 +45,60 @@ func (p *Google) chat(ctx context.Context, request core.Request) (core.Response,
 		return core.Response{}, unusableResponse("the "+p.label()+" answer could not be encoded", err)
 	}
 	return core.Response{Body: body, ContentType: core.ContentTypeJSON, Losses: losses}, nil
+}
+
+// GenerateImages asks an image-capable Gemini model for inline images over
+// generateContent, as the gateway does, and returns at most Count of them
+// with Google's usage, whose modality-tagged token counts carry the image
+// cost. A model that answers without image data, such as a text-only one,
+// fails and permits failover.
+func (p *Google) GenerateImages(ctx context.Context, request core.GenerateImagesRequest, credential *core.Credential) (core.GenerateImagesResult, error) {
+	if strings.TrimSpace(request.Prompt) == "" {
+		return core.GenerateImagesResult{}, &core.ProviderError{Message: p.label() + ": a prompt is required", Class: core.ProviderErrorInvalidRequest}
+	}
+	access, err := p.access(credential)
+	if err != nil {
+		return core.GenerateImagesResult{}, err
+	}
+	endpoint, err := p.modelURL(request.Model, access.project, "generateContent")
+	if err != nil {
+		return core.GenerateImagesResult{}, err
+	}
+	payload := googleContentRequest([]map[string]any{{"role": "user", "content": request.Prompt}}, nil, nil, []string{"TEXT", "IMAGE"})
+	authorization, err := p.authorization(access)
+	if err != nil {
+		return core.GenerateImagesResult{}, err
+	}
+	decoded, err := p.post(ctx, authorization, endpoint, payload)
+	if err != nil {
+		return core.GenerateImagesResult{}, err
+	}
+	images := make([]core.GeneratedImage, 0, 1)
+	for _, part := range googleParts(decoded) {
+		inline, ok := part["inlineData"].(map[string]any)
+		if !ok {
+			continue
+		}
+		encoded, _ := inline["data"].(string)
+		mimeType, _ := inline["mimeType"].(string)
+		raw, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil || len(raw) == 0 {
+			continue
+		}
+		images = append(images, core.GeneratedImage{Data: raw, MimeType: mimeType})
+		if request.Count > 0 && len(images) >= request.Count {
+			break
+		}
+	}
+	if len(images) == 0 {
+		message := p.label() + ": the model returned no image data — it may be a text-only model"
+		return core.GenerateImagesResult{}, &core.ProviderError{
+			Message: message, Class: core.ProviderErrorUnsupported, Classification: core.ProviderErrorClassification{FailoverEligible: true},
+			Cause: &InvocationError{Msg: message, FailoverEligible: true},
+		}
+	}
+	usage, _ := decoded["usageMetadata"].(map[string]any)
+	return core.GenerateImagesResult{Images: images, Usage: usage}, nil
 }
 
 // googleChatPayload maps a Chat Completions body to the generateContent

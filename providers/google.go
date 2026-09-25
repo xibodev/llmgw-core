@@ -76,15 +76,18 @@ type GoogleConfig struct {
 
 // Google implements core.Provider for Google's Gemini models on AI Studio or
 // Vertex AI, speaking their native generateContent grammar as the gateway
-// does. It is the whole vertical: the Chat transport, the catalog and what
-// its rows mean, and the credential each deployment takes.
+// does. It is the whole vertical: the Chat and embeddings transport, image
+// generation, the catalog and what its rows mean, and the credential each
+// deployment takes.
 //
-// Chat Completions is its surface. Google converts a Chat request to Gemini
-// contents itself, with the gateway's mapping: the text of the messages,
-// max_tokens and temperature. Every other field is dropped and reported in
-// Response.Losses, a material loss when it changes the answer, as tools do.
-// Google does not stream: Stream refuses and permits failover. A
-// translation.Adapter in front serves Messages and Responses over Chat.
+// Chat Completions and embeddings are its surfaces. Google converts a Chat
+// request to Gemini contents itself, with the gateway's mapping: the text of
+// the messages, max_tokens and temperature. Every other field is dropped and
+// reported in Response.Losses, a material loss when it changes the answer,
+// as tools do. Google does not stream: Stream refuses and permits failover.
+// A translation.Adapter in front serves Messages and Responses over Chat.
+// GenerateImages implements core.ImageGenerator. Video generation is not
+// served yet.
 //
 // Each operation authenticates with the credential it is given: an API key
 // travels in x-goog-api-key and never in a URL, and a token is the bearer.
@@ -106,7 +109,10 @@ type Google struct {
 	tokens *gcp.TokenCache
 }
 
-var _ core.Provider = (*Google)(nil)
+var (
+	_ core.Provider       = (*Google)(nil)
+	_ core.ImageGenerator = (*Google)(nil)
+)
 
 // NewGoogle returns a Google provider for one deployment.
 func NewGoogle(config GoogleConfig) (*Google, error) {
@@ -155,24 +161,27 @@ func NewGoogle(config GoogleConfig) (*Google, error) {
 	return p, nil
 }
 
-// NativeSurfaces reports Chat Completions for every model.
+// NativeSurfaces reports Chat Completions and embeddings for every model.
 func (p *Google) NativeSurfaces(string) []core.ModelSurface {
-	return []core.ModelSurface{core.ModelSurfaceChatCompletions}
+	return []core.ModelSurface{core.ModelSurfaceChatCompletions, core.ModelSurfaceEmbeddings}
 }
 
-// Invoke performs one Chat Completions request.
+// Invoke performs one Chat Completions or embeddings request.
 func (p *Google) Invoke(ctx context.Context, request core.Request) (core.Response, error) {
-	if request.Surface != core.ModelSurfaceChatCompletions {
-		return core.Response{}, &core.SurfaceError{Surface: request.Surface, Model: request.Model}
+	switch request.Surface {
+	case core.ModelSurfaceChatCompletions:
+		return p.chat(ctx, request)
+	case core.ModelSurfaceEmbeddings:
+		return p.embed(ctx, request)
 	}
-	return p.chat(ctx, request)
+	return core.Response{}, &core.SurfaceError{Surface: request.Surface, Model: request.Model}
 }
 
 // Stream refuses every request, as the gateway does: Google's transport
 // has no streaming yet. Nothing is sent, and the refusal permits failover
 // to a target that streams.
 func (p *Google) Stream(_ context.Context, request core.Request) (core.StreamIter, error) {
-	if request.Surface != core.ModelSurfaceChatCompletions {
+	if request.Surface != core.ModelSurfaceChatCompletions && request.Surface != core.ModelSurfaceEmbeddings {
 		return nil, &core.SurfaceError{Surface: request.Surface, Model: request.Model}
 	}
 	return nil, &core.ProviderError{

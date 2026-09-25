@@ -122,6 +122,11 @@ Products supply three stores, each with an in-memory reference implementation:
   serves a caller. Which credential applies is product policy. The Runtime keeps
   it fresh through `tokenstore.Coordinator`. `APIKeyRecord` stores a static key
   that never refreshes. Reference: `NewMemoryCredentialStore`.
+  - A provider receives `CredentialFromRecord(key, record)`: the access token
+    as `APIKey` or `Token`, plus the record's `AccountID`, `TokenType` and a
+    copy of its `Metadata`, such as a project ID.
+  - A `Credential` prints and logs whether each secret is set, never its
+    value. `Metadata` may hold secrets, so it is never serialized.
 - **`CatalogStore`** keeps discovered catalogs, with a new revision on every save.
   `Save` must be atomic for readers in any process. Run `catalogtest.Run`
   against every implementation. Reference: `NewMemoryCatalogStore`.

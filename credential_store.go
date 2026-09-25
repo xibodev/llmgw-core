@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"sync"
 
@@ -42,10 +43,21 @@ func APIKeyRecord(apiKey string) tokenstore.Record {
 }
 
 // CredentialFromRecord converts a stored record into the credential a provider
-// receives. The key becomes ConnectionID; record revisions are opaque strings,
-// so CredentialRevision stays zero and evidence carries the revision instead.
+// receives. The access token becomes APIKey for an API-key record and Token
+// otherwise, and the key becomes ConnectionID. AccountID, TokenType and
+// Metadata carry over, so a provider can address the account, tell what kind
+// of credential it holds and read its provider-specific values. Metadata is
+// copied, so the credential and the record never share a map. The refresh
+// token stays behind, because only tokenstore.Coordinator refreshes. Record
+// revisions are opaque strings, so CredentialRevision stays zero and evidence
+// carries the revision instead.
 func CredentialFromRecord(key string, record tokenstore.Record) *Credential {
-	credential := &Credential{ConnectionID: key}
+	credential := &Credential{
+		ConnectionID: key,
+		AccountID:    record.AccountID,
+		TokenType:    record.TokenType,
+		Metadata:     maps.Clone(record.Metadata),
+	}
 	if record.TokenType == TokenTypeAPIKey {
 		credential.APIKey = record.AccessToken
 	} else {

@@ -3,6 +3,7 @@ package core_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"sync"
 	"testing"
 
@@ -78,6 +79,41 @@ func TestAPIKeyRecordsNeverRefresh(t *testing.T) {
 	oauth := core.CredentialFromRecord("user-1-codex", tokenstore.Record{AccessToken: "access-token", TokenType: "Bearer"})
 	if oauth.Token != "access-token" || oauth.APIKey != "" || oauth.ConnectionID != "user-1-codex" {
 		t.Fatalf("OAuth credential=%+v", oauth)
+	}
+}
+
+func TestCredentialFromRecordCarriesAccountTokenTypeAndMetadata(t *testing.T) {
+	t.Parallel()
+	oauth := core.CredentialFromRecord("user-1-codex", tokenstore.Record{
+		Revision: "3", AccessToken: "access-token", RefreshToken: "refresh-token", IDToken: "id-token",
+		TokenType: "Bearer", AccountID: "account-1", Metadata: map[string]string{"project_id": "project-1"},
+	})
+	if oauth.Token != "access-token" || oauth.APIKey != "" || oauth.ConnectionID != "user-1-codex" || oauth.CredentialRevision != 0 ||
+		oauth.AccountID != "account-1" || oauth.TokenType != "Bearer" || !maps.Equal(oauth.Metadata, map[string]string{"project_id": "project-1"}) {
+		t.Fatalf("OAuth credential=%v token=%q metadata=%v", oauth, oauth.Token, oauth.Metadata)
+	}
+	apiKey := core.CredentialFromRecord("system-openai", core.APIKeyRecord("static-api-key"))
+	if apiKey.APIKey != "static-api-key" || apiKey.Token != "" || apiKey.ConnectionID != "system-openai" ||
+		apiKey.AccountID != "" || apiKey.TokenType != core.TokenTypeAPIKey || apiKey.Metadata != nil {
+		t.Fatalf("API key credential=%v api key=%q metadata=%v, want nil metadata to stay nil", apiKey, apiKey.APIKey, apiKey.Metadata)
+	}
+}
+
+func TestCredentialFromRecordCopiesMetadata(t *testing.T) {
+	t.Parallel()
+	record := tokenstore.Record{AccessToken: "access-token", TokenType: "Bearer", Metadata: map[string]string{"project_id": "project-1"}}
+	credential := core.CredentialFromRecord("user-1-antigravity", record)
+	credential.Metadata["project_id"] = "changed-by-provider"
+	credential.Metadata["added_by_provider"] = "value"
+	if !maps.Equal(record.Metadata, map[string]string{"project_id": "project-1"}) {
+		t.Fatalf("a change to the credential reached the record: %v", record.Metadata)
+	}
+
+	credential = core.CredentialFromRecord("user-1-antigravity", record)
+	record.Metadata["project_id"] = "changed-in-store"
+	record.Metadata["added_in_store"] = "value"
+	if !maps.Equal(credential.Metadata, map[string]string{"project_id": "project-1"}) {
+		t.Fatalf("a change to the record reached the credential: %v", credential.Metadata)
 	}
 }
 

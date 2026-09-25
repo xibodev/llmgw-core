@@ -3,7 +3,11 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"time"
 )
 
@@ -33,12 +37,90 @@ type Resolution struct {
 }
 
 // Credential contains authentication secrets for an upstream provider.
+//
+// fmt and slog print whether each secret is set, never its value. JSON
+// encoding carries every field but Metadata, so slog's JSON handler reveals
+// the secrets of a credential nested in another logged value.
 type Credential struct {
 	APIKey             string            `json:"api_key,omitempty"`
 	Token              string            `json:"token,omitempty"`
 	ConnectionID       string            `json:"connection_id,omitempty"`
 	CredentialRevision int64             `json:"credential_revision,omitempty"`
 	Headers            map[string]string `json:"headers,omitempty"`
+	// AccountID identifies the upstream account the credential belongs to,
+	// such as the ChatGPT account a Codex token acts for. Empty when unknown.
+	AccountID string `json:"account_id,omitempty"`
+	// TokenType names the kind of credential: TokenTypeAPIKey for a static
+	// key, usually "Bearer" for an OAuth token, or a kind the provider
+	// defines, such as a service account.
+	TokenType string `json:"token_type,omitempty"`
+	// Metadata carries provider-specific values, such as a project ID.
+	// Providers read it and never write it, because a credential may serve
+	// concurrent requests. It may hold secrets, such as a client secret, so
+	// it never serializes and its values never print.
+	Metadata map[string]string `json:"-"`
+}
+
+// String describes the credential without its secrets. The API key, the
+// token and the headers print only whether they are set, and each Metadata
+// key prints with only whether its value is set.
+func (c Credential) String() string {
+	return fmt.Sprintf("core.Credential{ConnectionID:%q CredentialRevision:%d AccountID:%q TokenType:%q APIKey:%s Token:%s Headers:%s Metadata:%v}",
+		c.ConnectionID, c.CredentialRevision, c.AccountID, c.TokenType,
+		presence(c.APIKey != ""), presence(c.Token != ""), presence(len(c.Headers) > 0), redactValues(c.Metadata))
+}
+
+// GoString keeps %#v from printing secrets.
+func (c Credential) GoString() string { return c.String() }
+
+// Format keeps every verb from printing secrets. Without it, fmt uses String
+// and GoString only for %v, %s, %q, %x and %X, and prints the fields for any
+// other verb, secrets included. Only %p of a value and %w escape it: fmt
+// reports those as bad verbs and prints the fields without calling a method.
+func (c Credential) Format(state fmt.State, verb rune) {
+	switch verb {
+	case 'v', 's', 'q', 'x', 'X':
+		if verb == 'v' && state.Flag('#') {
+			fmt.Fprint(state, c.GoString())
+			return
+		}
+		fmt.Fprintf(state, fmt.FormatString(state, verb), c.String())
+	default:
+		fmt.Fprintf(state, "%%!%c(core.Credential=%s)", verb, c.String())
+	}
+}
+
+// LogValue keeps structured logging from printing secrets. Metadata keys are
+// sorted, so equal credentials log alike.
+func (c Credential) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("connection_id", c.ConnectionID),
+		slog.Int64("credential_revision", c.CredentialRevision),
+		slog.String("account_id", c.AccountID),
+		slog.String("token_type", c.TokenType),
+		slog.Bool("has_api_key", c.APIKey != ""),
+		slog.Bool("has_token", c.Token != ""),
+		slog.Bool("has_headers", len(c.Headers) > 0),
+		slog.Any("metadata_keys", slices.Sorted(maps.Keys(c.Metadata))),
+	)
+}
+
+// presence says whether a secret is set without revealing it.
+func presence(set bool) string {
+	if set {
+		return "redacted"
+	}
+	return "absent"
+}
+
+// redactValues replaces each value with its presence. fmt prints a map in key
+// order, so the keys print sorted.
+func redactValues(values map[string]string) map[string]string {
+	redacted := make(map[string]string, len(values))
+	for key, value := range values {
+		redacted[key] = presence(value != "")
+	}
+	return redacted
 }
 
 // StreamIter yields complete SSE frames from an active provider stream.

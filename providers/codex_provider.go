@@ -61,7 +61,10 @@ type Codex struct {
 	responsesOnly bool
 }
 
-var _ core.Provider = (*Codex)(nil)
+var (
+	_ core.Provider      = (*Codex)(nil)
+	_ core.WirePreserver = (*Codex)(nil)
+)
 
 // NewCodex returns a Codex provider.
 func NewCodex(config CodexConfig) (*Codex, error) {
@@ -79,6 +82,13 @@ func (p *Codex) NativeSurfaces(string) []core.ModelSurface {
 		return []core.ModelSurface{core.ModelSurfaceResponses}
 	}
 	return []core.ModelSurface{core.ModelSurfaceResponses, core.ModelSurfaceChatCompletions}
+}
+
+// PreservesWire implements core.WirePreserver as the gateway declares
+// Codex: Responses is Codex's own protocol, and the Chat it serves is
+// converted to Responses, so only Responses is preserved.
+func (p *Codex) PreservesWire(_ string, surface core.ModelSurface) bool {
+	return surface == core.ModelSurfaceResponses
 }
 
 // Invoke performs one Responses or Chat Completions request. Codex always

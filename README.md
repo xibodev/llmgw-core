@@ -598,6 +598,80 @@ return translation.Adapter{Provider: provider}, nil // Messages over Chat
   `*core.SurfaceError`, and a catalog failure's `*providers.CatalogError`
   has a `CatalogCode*` code.
 
+## Anthropic
+
+`providers.Anthropic` is the Anthropic Messages vertical: Messages passed
+through as the gateway passes them, token counts, and the catalog and what
+its rows mean.
+
+```go
+provider, err := providers.NewAnthropic(providers.AnthropicConfig{
+    BaseURL:  s.AnthropicBaseURL, // optional; https://api.anthropic.com
+    Preamble: gatewayPreamble,    // optional: func(ctx) string
+})
+```
+
+- **Credential.** An API key is sent as `x-api-key`. A setup token, a
+  credential of kind `core.TokenTypeAnthropicSetupToken`, goes through
+  llm-provider-auth's `anthropic.HeaderSource` as the OAuth bearer with its
+  beta marker; like the gateway, the header source also recognizes one given
+  as an API key. Without a credential nothing authenticates, for an
+  Anthropic-compatible endpoint that needs none. A credential of another
+  kind is refused before anything is sent.
+- **Surfaces.** Messages only, and preserved: the body passes through with
+  the request's model and the operation's stream flag, the answer comes back
+  as Anthropic sent it, and `core.PreservesWire` reports it, so a product
+  labels it native. A setup token's completion is requested as a stream and
+  assembled, as in the gateway. A stream is relayed byte for byte and fails
+  if it ends before `message_stop`. `translation.Adapter` has no route from
+  Chat Completions to Messages, so a Chat client needs another target.
+- **Preamble.** The hook's text goes before the system prompt, as the
+  gateway puts its preamble there. A body's `_llmgw_preamble`, which
+  llm-translate also reads, supplies it when the hook returns none, and
+  never reaches Anthropic.
+- **Token counts.** `CountTokens` implements `core.TokenCounter` over
+  `/v1/messages/count_tokens`, forwarding the request's `anthropic-version`
+  and `anthropic-beta` values that hold no control character.
+- **Catalog.** `ListModels` reads the one page of `/v1/models` the gateway
+  reads. Every row serves Messages, with the registry's static
+  capabilities, fresh for an hour.
+- **Errors** are `*core.ProviderError`; a refusal keeps its status and
+  `Retry-After`.
+
+## Azure OpenAI
+
+`providers.AzureOpenAI` serves one Azure OpenAI resource as the gateway
+serves it: Chat Completions, and the resource's own deployments as its
+catalog.
+
+```go
+provider, err := providers.NewAzureOpenAI(providers.AzureOpenAIConfig{
+    BaseURL: s.AzureEndpoint, // the portal's endpoint; /openai/v1 is added
+})
+if err != nil {
+    return nil, err // not a resource endpoint
+}
+return translation.Adapter{Provider: provider}, nil // Messages and Responses over Chat
+```
+
+- **Credential.** An API key, sent as `api-key` and never as a bearer. A
+  request without one is refused before anything is sent.
+- **Base URL.** The portal's origin, `/openai` or `/openai/v1`. Anything
+  else, a proxy mount included, is refused when the provider is built.
+- **Surfaces.** Chat Completions, sent to `/openai/v1/chat/completions`
+  without an api-version. The body is rebuilt from the fields the
+  gateway's transport forwards, and every other field is reported as an
+  advisory loss. It is not the client's body, so Azure OpenAI declares no
+  wire preservation and its answers are labelled translated, as the gateway
+  labels them. The answer comes back as Azure sent it.
+- **Catalog.** The resource's succeeded, chat-callable deployments, listed
+  at the pinned api-version `2023-03-15-preview` and never from `/models`.
+  A page is continued by cursor only on the resource's origin, and no
+  redirect off the origin is followed, since it would carry the api-key.
+- **Errors** are `*core.ProviderError`. A catalog failure's code is the
+  gateway's: `authentication_failed` for a rejected key and
+  `not_discoverable` for any other.
+
 ## Execution
 
 `execution` holds the primitives failover is built from. Endpoints, policy

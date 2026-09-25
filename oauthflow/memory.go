@@ -12,34 +12,71 @@ import (
 	core "github.com/xibodev/llmgw-core"
 )
 
-// expiredRetention is how long an expired flow is kept so its owner is told
-// it expired rather than that it never existed.
-const expiredRetention = 15 * time.Minute
+// defaultExpiredRetention is how long an expired flow is kept when
+// MemoryFlowStoreOptions names no retention.
+const defaultExpiredRetention = 15 * time.Minute
+
+// MemoryFlowStoreOptions configure a MemoryFlowStore. The zero value is a
+// store with the real clock, no cap and the default retention.
+type MemoryFlowStoreOptions struct {
+	// Now is the clock; nil means time.Now.
+	Now func() time.Time
+	// MaxFlowsPerCaller caps a caller's pending flows, those neither
+	// consumed nor expired. Creating one more evicts that caller's oldest
+	// pending flow, by CreatedAt and then insertion order, as the gateway
+	// does; an evicted flow answers ErrFlowNotFound. Zero means no cap.
+	MaxFlowsPerCaller int
+	// ExpiredRetention is how long an expired flow is kept, without its
+	// secrets, so its owner is told it expired rather than that it never
+	// existed. Zero means 15 minutes.
+	ExpiredRetention time.Duration
+}
 
 // MemoryFlowStore is the in-memory reference FlowStore, for tests and
 // single-process products. It purges expired flows lazily, when flows are
 // created or looked up, and needs no background goroutine.
 type MemoryFlowStore struct {
-	now func() time.Time
+	now       func() time.Time
+	maxFlows  int
+	retention time.Duration
 
 	mu       sync.Mutex
-	flows    map[string]Flow
+	flows    map[string]*memoryEntry
 	states   map[[sha256.Size]byte]string
 	revision uint64
+	sequence uint64
+}
+
+// memoryEntry is a stored flow and what the store needs to manage it.
+type memoryEntry struct {
+	flow Flow
+	// sequence is the insertion order, which breaks CreatedAt ties when
+	// the cap evicts.
+	sequence uint64
+	// stateKey is the hash of the flow's state; indexed says whether the
+	// state index still maps it to the flow.
+	stateKey [sha256.Size]byte
+	indexed  bool
 }
 
 var _ FlowStore = (*MemoryFlowStore)(nil)
 
-// NewMemoryFlowStore returns an empty store that reads time from now; nil
-// means time.Now.
-func NewMemoryFlowStore(now func() time.Time) *MemoryFlowStore {
-	if now == nil {
-		now = time.Now
+// NewMemoryFlowStore returns an empty store.
+func NewMemoryFlowStore(options MemoryFlowStoreOptions) *MemoryFlowStore {
+	store := &MemoryFlowStore{
+		now: options.Now, maxFlows: options.MaxFlowsPerCaller, retention: options.ExpiredRetention,
+		flows: map[string]*memoryEntry{}, states: map[[sha256.Size]byte]string{},
 	}
-	return &MemoryFlowStore{now: now, flows: map[string]Flow{}, states: map[[sha256.Size]byte]string{}}
+	if store.now == nil {
+		store.now = time.Now
+	}
+	if store.retention <= 0 {
+		store.retention = defaultExpiredRetention
+	}
+	return store
 }
 
-// Create implements FlowStore.
+// Create implements FlowStore. A failed Create evicts nothing.
 func (s *MemoryFlowStore) Create(ctx context.Context, flow Flow) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -59,17 +96,22 @@ func (s *MemoryFlowStore) Create(ctx context.Context, flow Flow) error {
 	if _, exists := s.flows[flow.ID]; exists {
 		return ErrFlowExists
 	}
-	stateKey := sha256.Sum256([]byte(flow.Secrets.State))
+	entry := &memoryEntry{flow: flow.Clone()}
 	if flow.Secrets.State != "" {
-		if _, exists := s.states[stateKey]; exists {
+		entry.stateKey, entry.indexed = sha256.Sum256([]byte(flow.Secrets.State)), true
+		if _, exists := s.states[entry.stateKey]; exists {
 			return ErrFlowExists
 		}
-		s.states[stateKey] = flow.ID
 	}
-	flow = flow.Clone()
-	flow.ConsumedAt = time.Time{}
-	flow.Revision = s.nextRevisionLocked()
-	s.flows[flow.ID] = flow
+	s.evictLocked(flow.Caller)
+	if entry.indexed {
+		s.states[entry.stateKey] = flow.ID
+	}
+	s.sequence++
+	entry.sequence = s.sequence
+	entry.flow.ConsumedAt = time.Time{}
+	entry.flow.Revision = s.nextRevisionLocked()
+	s.flows[flow.ID] = entry
 	return nil
 }
 
@@ -80,11 +122,11 @@ func (s *MemoryFlowStore) Get(ctx context.Context, caller core.Caller, id string
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	flow, err := s.ownedLocked(caller, id)
+	entry, err := s.ownedLocked(caller, id)
 	if err != nil {
 		return Flow{}, err
 	}
-	return flow.Clone(), nil
+	return entry.flow.Clone(), nil
 }
 
 // Consume implements FlowStore.
@@ -94,22 +136,19 @@ func (s *MemoryFlowStore) Consume(ctx context.Context, caller core.Caller, id st
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	flow, err := s.ownedLocked(caller, id)
+	entry, err := s.ownedLocked(caller, id)
 	if err != nil {
 		return Flow{}, err
 	}
-	if flow.Consumed() {
+	if entry.flow.Consumed() {
 		return Flow{}, ErrFlowNotFound
 	}
-	consumed := flow.Clone()
+	consumed := entry.flow.Clone()
 	consumed.ConsumedAt = s.now()
 	consumed.Revision = s.nextRevisionLocked()
-	if flow.Secrets.State != "" {
-		delete(s.states, sha256.Sum256([]byte(flow.Secrets.State)))
-	}
-	stored := consumed
-	stored.Secrets = Secrets{}
-	s.flows[id] = stored
+	s.unindexLocked(entry)
+	entry.flow = consumed.Clone()
+	entry.flow.Secrets = Secrets{}
 	return consumed, nil
 }
 
@@ -120,17 +159,16 @@ func (s *MemoryFlowStore) Update(ctx context.Context, caller core.Caller, flow F
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	stored, err := s.ownedLocked(caller, flow.ID)
+	entry, err := s.ownedLocked(caller, flow.ID)
 	if err != nil {
 		return Flow{}, err
 	}
-	if stored.Revision != flow.Revision {
+	if entry.flow.Revision != flow.Revision {
 		return Flow{}, ErrConflict
 	}
-	stored.Progress = flow.Progress
-	stored.Revision = s.nextRevisionLocked()
-	s.flows[stored.ID] = stored
-	return stored.Clone(), nil
+	entry.flow.Progress = flow.Progress
+	entry.flow.Revision = s.nextRevisionLocked()
+	return entry.flow.Clone(), nil
 }
 
 // ResolveState implements FlowStore.
@@ -143,48 +181,92 @@ func (s *MemoryFlowStore) ResolveState(ctx context.Context, state string) (core.
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	id, ok := s.states[sha256.Sum256([]byte(state))]
-	if !ok {
+	entry, ok := s.flows[s.states[sha256.Sum256([]byte(state))]]
+	if !ok || !entry.indexed {
 		return core.Caller{}, "", ErrFlowNotFound
 	}
-	flow, err := s.ownedLocked(s.flows[id].Caller, id)
-	if err != nil {
+	if _, err := s.ownedLocked(entry.flow.Caller, entry.flow.ID); err != nil {
 		return core.Caller{}, "", err
 	}
-	return flow.Caller, flow.ID, nil
+	return entry.flow.Caller, entry.flow.ID, nil
 }
 
 // ownedLocked returns caller's stored flow. The owner check comes first, so
 // another caller cannot tell an expired flow from a missing one.
-func (s *MemoryFlowStore) ownedLocked(caller core.Caller, id string) (Flow, error) {
-	flow, ok := s.flows[id]
-	if !ok || flow.Caller != caller {
-		return Flow{}, ErrFlowNotFound
+func (s *MemoryFlowStore) ownedLocked(caller core.Caller, id string) (*memoryEntry, error) {
+	entry, ok := s.flows[id]
+	if !ok || entry.flow.Caller != caller {
+		return nil, ErrFlowNotFound
 	}
 	now := s.now()
-	if !flow.Expired(now) {
-		return flow, nil
+	if !entry.flow.Expired(now) {
+		return entry, nil
 	}
-	if now.Sub(flow.ExpiresAt) >= expiredRetention {
-		s.deleteLocked(flow)
-		return Flow{}, ErrFlowNotFound
+	if now.Sub(entry.flow.ExpiresAt) >= s.retention {
+		s.deleteLocked(entry)
+		return nil, ErrFlowNotFound
 	}
-	return Flow{}, ErrFlowExpired
+	s.expireLocked(entry)
+	return nil, ErrFlowExpired
 }
 
+// expireLocked wipes an expired flow's secrets: it can never be consumed, so
+// its verifier and state must not linger. The state index keeps only the
+// state's hash, so a late callback still learns that the flow expired.
+func (s *MemoryFlowStore) expireLocked(entry *memoryEntry) {
+	entry.flow.Secrets = Secrets{}
+}
+
+// evictLocked makes room for one more pending flow of caller under the cap.
+func (s *MemoryFlowStore) evictLocked(caller core.Caller) {
+	if s.maxFlows <= 0 {
+		return
+	}
+	now := s.now()
+	for {
+		count := 0
+		var oldest *memoryEntry
+		for _, entry := range s.flows {
+			if entry.flow.Caller != caller || entry.flow.Consumed() || entry.flow.Expired(now) {
+				continue
+			}
+			count++
+			if oldest == nil || entry.flow.CreatedAt.Before(oldest.flow.CreatedAt) ||
+				entry.flow.CreatedAt.Equal(oldest.flow.CreatedAt) && entry.sequence < oldest.sequence {
+				oldest = entry
+			}
+		}
+		if count < s.maxFlows {
+			return
+		}
+		s.deleteLocked(oldest)
+	}
+}
+
+// purgeLocked deletes flows past their retention and wipes the secrets of
+// the other expired ones.
 func (s *MemoryFlowStore) purgeLocked() {
 	now := s.now()
-	for _, flow := range s.flows {
-		if now.Sub(flow.ExpiresAt) >= expiredRetention {
-			s.deleteLocked(flow)
+	for _, entry := range s.flows {
+		switch {
+		case !entry.flow.Expired(now):
+		case now.Sub(entry.flow.ExpiresAt) >= s.retention:
+			s.deleteLocked(entry)
+		default:
+			s.expireLocked(entry)
 		}
 	}
 }
 
-func (s *MemoryFlowStore) deleteLocked(flow Flow) {
-	delete(s.flows, flow.ID)
-	if flow.Secrets.State != "" {
-		delete(s.states, sha256.Sum256([]byte(flow.Secrets.State)))
+func (s *MemoryFlowStore) deleteLocked(entry *memoryEntry) {
+	delete(s.flows, entry.flow.ID)
+	s.unindexLocked(entry)
+}
+
+func (s *MemoryFlowStore) unindexLocked(entry *memoryEntry) {
+	if entry.indexed {
+		delete(s.states, entry.stateKey)
+		entry.indexed = false
 	}
 }
 

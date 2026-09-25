@@ -215,10 +215,11 @@ user pastes back. Products keep their HTTP routes and map each onto one call:
 
 ```go
 svc, err := oauthflow.New(oauthflow.Options{
-    Store:         oauthflow.NewMemoryFlowStore(nil), // or a shared store
-    Credentials:   credentialStore,                   // core.CredentialStore
-    Drivers:       driverFor,                         // (instance, method) -> Driver
-    CredentialKey: keyFor,                            // product policy
+    // Or a shared store. The memory store can cap each caller's pending flows.
+    Store:         oauthflow.NewMemoryFlowStore(oauthflow.MemoryFlowStoreOptions{MaxFlowsPerCaller: 5}),
+    Credentials:   credentialStore, // core.CredentialStore
+    Drivers:       driverFor,       // (instance, method) -> Driver
+    CredentialKey: keyFor,          // product policy
 })
 view, err := svc.Start(ctx, caller, "antigravity", oauthflow.MethodBrowser,
     oauthflow.WithRedirectURI(callbackURL))

@@ -3,7 +3,8 @@
 // authorization, and codes the owner pastes back.
 //
 // A FlowStore keeps each flow bound to the core.Caller that started it and
-// consumes it at most once. MemoryFlowStore is the in-memory reference; run
+// consumes it at most once. MemoryFlowStore is the in-memory reference, and
+// can cap each caller's pending flows as the gateway does; run
 // oauthflowtest.Run against every implementation. A Service runs the flows
 // over a store, provider drivers and a core.CredentialStore:
 //

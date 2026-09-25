@@ -46,7 +46,7 @@ func TestBrowserPKCEDriverThroughTheService(t *testing.T) {
 	}}
 	credentials := core.NewMemoryCredentialStore()
 	service, err := oauthflow.New(oauthflow.Options{
-		Store: oauthflow.NewMemoryFlowStore(nil), Credentials: credentials,
+		Store: oauthflow.NewMemoryFlowStore(oauthflow.MemoryFlowStoreOptions{}), Credentials: credentials,
 		Drivers: func(string, oauthflow.Method) (oauthflow.Driver, error) { return driver, nil },
 		CredentialKey: func(_ context.Context, completion oauthflow.Completion) (string, error) {
 			return completion.Caller.ID + "/" + completion.Instance, nil

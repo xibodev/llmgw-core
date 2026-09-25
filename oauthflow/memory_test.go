@@ -15,7 +15,7 @@ import (
 
 func TestMemoryFlowStoreConformance(t *testing.T) {
 	oauthflowtest.Run(t, func(now func() time.Time) oauthflow.FlowStore {
-		return oauthflow.NewMemoryFlowStore(now)
+		return oauthflow.NewMemoryFlowStore(oauthflow.MemoryFlowStoreOptions{Now: now})
 	})
 }
 
@@ -23,7 +23,7 @@ func TestMemoryFlowStorePurgesLongExpiredFlows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	now := time.Unix(1_800_000_000, 0)
-	store := oauthflow.NewMemoryFlowStore(func() time.Time { return now })
+	store := oauthflow.NewMemoryFlowStore(oauthflow.MemoryFlowStoreOptions{Now: func() time.Time { return now }})
 	owner := core.Caller{ID: "user-1", Kind: core.CallerHuman}
 	flow := oauthflow.Flow{ID: "flow-old", Caller: owner, ExpiresAt: now.Add(time.Minute), Secrets: oauthflow.Secrets{State: "state-old"}}
 	if err := store.Create(ctx, flow); err != nil {
@@ -49,7 +49,7 @@ func TestMemoryFlowStorePurgesLongExpiredFlows(t *testing.T) {
 func TestMemoryFlowStoreValidatesFlows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	store := oauthflow.NewMemoryFlowStore(nil)
+	store := oauthflow.NewMemoryFlowStore(oauthflow.MemoryFlowStoreOptions{})
 	valid := oauthflow.Flow{ID: "flow-1", Caller: core.LocalCaller(), ExpiresAt: time.Now().Add(time.Minute)}
 	invalid := map[string]oauthflow.Flow{
 		"no id":         {Caller: valid.Caller, ExpiresAt: valid.ExpiresAt},

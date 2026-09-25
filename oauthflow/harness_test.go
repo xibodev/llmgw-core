@@ -48,7 +48,7 @@ func newHarness(t *testing.T) *harness {
 		driver:      &fakeDriver{},
 	}
 	service, err := oauthflow.New(oauthflow.Options{
-		Store:       oauthflow.NewMemoryFlowStore(h.clock.Now),
+		Store:       oauthflow.NewMemoryFlowStore(oauthflow.MemoryFlowStoreOptions{Now: h.clock.Now}),
 		Credentials: h.credentials,
 		Drivers: func(instance string, _ oauthflow.Method) (oauthflow.Driver, error) {
 			if instance != fixtureInstance {

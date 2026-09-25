@@ -84,7 +84,7 @@ func TestStartRejectsWhatItCannotRun(t *testing.T) {
 	})
 	for name, driver := range map[string]oauthflow.Driver{"code driver for device": codeOnly, "no state or verifier": incomplete} {
 		service, err := oauthflow.New(oauthflow.Options{
-			Store: oauthflow.NewMemoryFlowStore(nil), Credentials: core.NewMemoryCredentialStore(),
+			Store: oauthflow.NewMemoryFlowStore(oauthflow.MemoryFlowStoreOptions{}), Credentials: core.NewMemoryCredentialStore(),
 			Drivers:       func(string, oauthflow.Method) (oauthflow.Driver, error) { return driver, nil },
 			CredentialKey: func(context.Context, oauthflow.Completion) (string, error) { return "key", nil },
 		})

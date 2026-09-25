@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -198,6 +199,7 @@ func oauthStore(t *testing.T, now time.Time) *core.MemoryCredentialStore {
 	store := core.NewMemoryCredentialStore()
 	if _, err := store.Save(context.Background(), "user-1-codex", tokenstore.Record{
 		AccessToken: "stale", RefreshToken: "refresh-1", TokenType: "Bearer", AccountID: "account-1", Expiry: now.Add(time.Hour),
+		Metadata: map[string]string{"project_id": "project-1"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -242,6 +244,33 @@ func TestRejectedOAuthCredentialIsRefreshedAndReplayedOnce(t *testing.T) {
 	}
 	if records := evidence.Records(); records[0].CredentialRevision != stored.Revision {
 		t.Fatalf("evidence revision=%q, want the refreshed %q", records[0].CredentialRevision, stored.Revision)
+	}
+}
+
+func TestProvidersReceiveTheRecordsAccountAndMetadata(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	calls := &counters{}
+	runtime := mustRuntime(t, coreruntime.Options[settings]{
+		Providers: factory(calls, func(p *fakeProvider) {
+			p.reject = func(c *core.Credential) bool { return c != nil && c.Token == "stale" }
+		}),
+		Credentials: oauthStore(t, now), Refresh: countingRefresh(&atomic.Int32{}, now),
+	})
+	if _, err := runtime.Invoke(context.Background(), core.Caller{ID: "user-1", Kind: core.CallerHuman}, "codex", chat); err != nil {
+		t.Fatal(err)
+	}
+	seen := calls.credentials()
+	if len(seen) != 2 || seen[0].Token != "stale" || seen[1].Token != "fresh" {
+		t.Fatalf("seen=%v, want the rejected credential and its replay", seen)
+	}
+	// The refresh returns no token type or metadata. The replay still
+	// carries them, because the coordinator keeps them in the stored record.
+	for _, credential := range seen {
+		if credential.AccountID != "account-1" || credential.TokenType != "Bearer" ||
+			!maps.Equal(credential.Metadata, map[string]string{"project_id": "project-1"}) {
+			t.Fatalf("credential=%v metadata=%v, want the record's account, token type and metadata", credential, credential.Metadata)
+		}
 	}
 }
 

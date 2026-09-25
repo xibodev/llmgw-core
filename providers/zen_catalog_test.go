@@ -1,7 +1,11 @@
 package providers
 
 import (
+	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 	"time"
@@ -138,5 +142,109 @@ func TestParseZenModelsRejectsMalformedCatalogs(t *testing.T) {
 	}
 	if models, err := parseZenModels([]byte(`{"data":[]}`), time.Now()); err != nil || len(models) != 0 {
 		t.Fatalf("empty catalog = %+v, err = %v", models, err)
+	}
+}
+
+func zenCatalogBackend(metadata, live string) *zenBackend {
+	return &zenBackend{reply: func(w http.ResponseWriter, r *http.Request, _ int) {
+		switch r.URL.Path {
+		case "/metadata":
+			_, _ = io.WriteString(w, metadata)
+		case "/zen/v1/models":
+			_, _ = io.WriteString(w, live)
+		default:
+			http.NotFound(w, r)
+		}
+	}}
+}
+
+func TestZenListsModelsAsTheGatewayDoes(t *testing.T) {
+	t.Parallel()
+	backend := zenCatalogBackend(zenMetadataFixture, zenLiveFixture)
+	server := httptest.NewServer(backend)
+	defer server.Close()
+	provider := newTestZen(t, server, nil)
+
+	models, err := provider.ListModels(context.Background(), nil)
+	if err != nil || !slices.Equal(modelIDsOf(models), []string{"chat-fixture-free", "muse-fixture-free", "sparse-fixture-free"}) ||
+		!slices.Equal(models[1].SupportedAPIs, []string{"/responses"}) || !slices.Equal(models[1].Tags, []string{ModelTagFree}) ||
+		!models[1].Capabilities.Freshness.ExpiresAt.Equal(zenFixtureNow.Add(time.Hour)) {
+		t.Fatalf("anonymous models = %+v, err = %v", models, err)
+	}
+	calls := backend.take()
+	if len(calls) != 2 || calls[0].path != "/metadata" || calls[1].path != "/zen/v1/models" {
+		t.Fatalf("anonymous upstream = %+v", calls)
+	}
+	if header := calls[0].header; header.Get("Accept") != "application/json" || header.Get("Authorization") != "" || header.Get("X-Opencode-Session") != "" {
+		t.Fatalf("models.dev headers = %v", header)
+	}
+	assertZenHeaders(t, calls[1].header, "Bearer public", "application/json", freshIdentity)
+
+	models, err = provider.ListModels(context.Background(), &core.Credential{APIKey: "fixture-key"})
+	if err != nil || len(models) != 5 || models[0].ID != "chat-fixture-free" || models[0].OwnedBy != "opencode" || len(models[0].Tags) != 0 {
+		t.Fatalf("keyed models = %+v, err = %v", models, err)
+	}
+	calls = backend.take()
+	if len(calls) != 1 || calls[0].path != "/zen/v1/models" || calls[0].header.Get("Authorization") != "Bearer fixture-key" ||
+		calls[0].header.Get("Content-Type") != "application/json" || calls[0].header.Get("Accept") != "" || calls[0].header.Get("X-Opencode-Session") != "" {
+		t.Fatalf("keyed upstream = %+v", calls)
+	}
+}
+
+func modelIDsOf(models []core.ModelInfo) []string {
+	ids := make([]string, 0, len(models))
+	for _, model := range models {
+		ids = append(ids, model.ID)
+	}
+	return ids
+}
+
+func TestZenListModelsFailuresNameTheirDocument(t *testing.T) {
+	t.Parallel()
+	refuse := func(path string, status int) *zenBackend {
+		return &zenBackend{reply: func(w http.ResponseWriter, r *http.Request, _ int) {
+			if r.URL.Path == path {
+				w.Header().Set("Retry-After", "5")
+				w.WriteHeader(status)
+				return
+			}
+			_, _ = io.WriteString(w, map[string]string{"/metadata": zenMetadataFixture, "/zen/v1/models": zenLiveFixture}[r.URL.Path])
+		}}
+	}
+	for _, test := range []struct {
+		name       string
+		backend    *zenBackend
+		credential *core.Credential
+		code       string
+		status     int
+		class      core.ProviderErrorClass
+	}{
+		{"models.dev refused", refuse("/metadata", 503), nil, "metadata_http_error", 503, core.ProviderErrorUpstream},
+		{"live catalog refused", refuse("/zen/v1/models", 401), nil, "http_error", 401, core.ProviderErrorAuth},
+		{"keyed catalog refused", refuse("/zen/v1/models", 429), &core.Credential{APIKey: "fixture-key"}, "http_error", 429, core.ProviderErrorRateLimited},
+		{"models.dev too large", zenCatalogBackend(zenMetadataFixture+" ", zenLiveFixture), nil, "metadata_not_discoverable", 0, core.ProviderErrorUpstream},
+		{"live catalog not JSON", zenCatalogBackend(zenMetadataFixture, "not json"), nil, "invalid_json", 0, core.ProviderErrorUpstream},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(test.backend)
+			defer server.Close()
+			provider, err := NewZen(ZenConfig{
+				BaseURL: server.URL + "/zen/v1", MetadataURL: server.URL + "/metadata", CatalogClient: server.Client(),
+				MaxCatalogBytes: int64(len(zenMetadataFixture)),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = provider.ListModels(context.Background(), test.credential)
+			var failure *core.ProviderError
+			var catalog *CatalogError
+			if !errors.As(err, &failure) || !errors.As(err, &catalog) || catalog.Code != test.code || catalog.Status != test.status ||
+				failure.Class != test.class || failure.Classification.StatusCode != test.status {
+				t.Fatalf("err = %#v", err)
+			}
+			if test.status != 0 && (catalog.RetryAfter != 5*time.Second || failure.Classification.RetryAfter != 5*time.Second) {
+				t.Fatalf("retry after = %v", catalog.RetryAfter)
+			}
+		})
 	}
 }

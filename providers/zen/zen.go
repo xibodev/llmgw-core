@@ -1,6 +1,9 @@
 // Package zen implements the reusable, storage-neutral OpenCode Zen anonymous
 // admission contract. It deliberately does not cache catalogs or schedule
 // refreshes; callers decide when and where evidence is retained.
+//
+// providers.Zen, the core.Provider for OpenCode Zen, is built on it: the
+// invocation identity, the request admission and Normalize.
 package zen
 
 import (
@@ -196,6 +199,9 @@ func randomID(prefix string) (string, error) {
 }
 
 // AnonymousHeaders returns headers for one standalone logical invocation.
+//
+// Deprecated: providers.Zen sets these headers, from the same
+// ApplyInvocationHeaders, on every request it sends.
 func (c *Client) AnonymousHeaders() (http.Header, error) {
 	identity, err := NewInvocationIdentity(nil, c.newID)
 	if err != nil {
@@ -206,6 +212,10 @@ func (c *Client) AnonymousHeaders() (http.Header, error) {
 	return c.AnonymousHeadersFor(identity), nil
 }
 
+// AnonymousHeadersFor returns the anonymous headers of one invocation.
+//
+// Deprecated: providers.Zen sets these headers, from the same
+// ApplyInvocationHeaders, on every request it sends.
 func (c *Client) AnonymousHeadersFor(identity InvocationIdentity) http.Header {
 	header := http.Header{}
 	header.Set("Authorization", "Bearer public")
@@ -257,6 +267,10 @@ type catalogEnvelope struct {
 
 // Discover returns the OpenCode-compatible public snapshot. OpenCode exposes
 // snapshot models with zero input cost, then applies its ordinary status rules.
+//
+// Deprecated: Normalize derives the snapshot, by the same rules, from a
+// models.dev catalog a product fetched itself, and providers.Zen lists the
+// verified catalog anonymous access admits.
 func (c *Client) Discover(ctx context.Context) (core.CatalogEvidence, error) {
 	evidence, _, err := c.discoverSnapshot(ctx)
 	return evidence, err
@@ -277,6 +291,10 @@ func (c *Client) discoverSnapshot(ctx context.Context) (core.CatalogEvidence, me
 
 // DiscoverVerified is the optional strict policy: a snapshot model must also
 // appear in the live Zen catalog and have every described monetary cost at zero.
+//
+// Deprecated: providers.Zen lists this catalog through the same Normalize,
+// with typed errors and rows tagged and routable; Normalize derives it from
+// documents a product fetched itself.
 func (c *Client) DiscoverVerified(ctx context.Context) (core.CatalogEvidence, error) {
 	public, metadata, err := c.discoverSnapshot(ctx)
 	if err != nil {
@@ -513,6 +531,11 @@ func NativeSurface(model core.ModelInfo) (core.ModelSurface, bool) {
 // CompleteNative sends an already surface-correct payload. It does not perform
 // wire translation, making lossless Chat/Responses routing an explicit caller
 // responsibility.
+//
+// Deprecated: providers.Zen serves Chat and Responses, keyed or anonymous,
+// with the gateway's request shaping and the same admission, and reports
+// canonical errors. CompleteNative is unchanged: it admits every request
+// anonymously and sends every field.
 func (c *Client) CompleteNative(ctx context.Context, model string, surface core.ModelSurface, payload map[string]any) (map[string]any, error) {
 	path := ""
 	switch surface {

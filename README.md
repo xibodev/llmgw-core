@@ -23,11 +23,11 @@ go get github.com/xibodev/llmgw-core
 ### Dependencies
 
 - **llm-provider-auth v0.6.0.** Its `codex` package no longer supplies a
-  client version, so `providers.NewCodexProvider` requires
-  `CodexProviderConfig.ClientVersion`, the version of the product making the
-  call, and returns an error when it is blank. The provider sends it to the
-  Codex catalog as `client_version`. `ResponsesURL` and `ModelsURL` still
-  default to the canonical Codex endpoints.
+  client version, so `providers.NewCodex` and `NewCodexProvider` require
+  `ClientVersion`, the version of the product making the call, and return an
+  error when it is blank. The providers send it to the Codex catalog as
+  `client_version`. `ResponsesURL` and `ModelsURL` still default to the
+  canonical Codex endpoints.
 - **llm-translate v0.3.0.** Conversions report the vendor fields inside
   messages that the target surface cannot carry, and the translation adapter
   enforces those losses; see [Loss policy](#loss-policy). The Anthropic and
@@ -227,6 +227,53 @@ Dropped `reasoning_details`, `reasoning_content` and `cache_control`, and
 dropped reasoning items or thinking blocks, reported at `<path>.reasoning`,
 are advisory: the default policy allows and reports them, and a product
 that depends on them rejects them by path.
+
+## Codex
+
+`providers.Codex` is a whole provider vertical on the provider contract:
+the Codex Responses transport, the catalog and what its rows mean, and,
+with `NewCodexRefresh`, the credential refresh. None of it is left for a
+product to normalize.
+
+```go
+rt, err := runtime.New(runtime.Options[Settings]{
+    Settings: settingsSource,
+    Providers: func(s Settings, instance string) (core.Provider, error) {
+        codex, err := providers.NewCodex(providers.CodexConfig{
+            Instructions:  s.CodexInstructions,
+            ClientVersion: s.CodexClientVersion, // names the product; required
+        })
+        if err != nil {
+            return nil, err
+        }
+        return translation.Adapter{Provider: codex}, nil // Chat over Responses
+    },
+    Refresh: func(s Settings, instance string) tokenstore.RefreshFunc {
+        return providers.NewCodexRefresh(codexauth.Config{ClientID: s.CodexClientID})
+    },
+    Credentials: credentialStore,
+})
+```
+
+- **Credential.** Each request authenticates with its own credential: the
+  token is the bearer and `AccountID` becomes the `ChatGPT-Account-ID`
+  header. A credential without a token, such as an API key, is a
+  configuration error, and nothing is sent.
+- **Surfaces.** Responses is the only native surface, and it streams. A
+  shorthand string `input` is sent as the one user message it abbreviates.
+- **Catalog.** `ListModels` returns only rows supported in the API and
+  listed. A row that omits `supported_endpoints`, as current catalogs do,
+  gets `/responses`.
+- **Refresh.** A rejected token fails with status 401, so the Runtime
+  refreshes once and replays. The refreshed record keeps the account, taken
+  from the token response or its ID token, so a refresh that returns another
+  account is refused. A grant the token endpoint rejects for good revokes
+  the credential.
+- **Errors** are `*core.ProviderError`, with the transport's error as the
+  cause.
+
+`CodexProvider`, which reads tokens from a session source, is deprecated.
+It shares the transport, so both send identical requests.
 
 ## Execution
 

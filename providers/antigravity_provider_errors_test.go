@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -192,7 +193,7 @@ func TestAntigravityGeneratesImagesAsTheLegacyAdapterDoes(t *testing.T) {
 		t.Fatalf("result = %+v, err = %v", result, err)
 	}
 	sent := calls()
-	if len(sent) != 4 || withoutRequestID(sent[1]).body != withoutRequestID(sent[3]).body || !strings.Contains(sent[3].body, `"responseModalities":["TEXT","IMAGE"]`) {
+	if len(sent) != 4 || !reflect.DeepEqual(withoutRequestID(sent[3]), withoutRequestID(sent[1])) || !strings.Contains(sent[3].body, `"responseModalities":["TEXT","IMAGE"]`) {
 		t.Fatalf("upstream = %+v", sent)
 	}
 

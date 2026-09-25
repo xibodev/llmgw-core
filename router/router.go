@@ -10,6 +10,9 @@ import (
 )
 
 // CircuitBreaker tracks failure rates and opens when an upstream fails repeatedly.
+//
+// New code uses execution.HealthTracker, which adds per-key policies, an
+// injectable clock and outcomes read from classified errors.
 type CircuitBreaker struct {
 	mu          sync.Mutex
 	failures    map[string]int

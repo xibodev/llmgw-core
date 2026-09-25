@@ -1,4 +1,4 @@
 github.com/xibodev/llm-provider-auth v0.6.0 h1:unymPv0X++cXCT/eXypsfEpq45UPy7u4d/rbell4PZ0=
 github.com/xibodev/llm-provider-auth v0.6.0/go.mod h1:u6XRI5ljvcAqmJdx/uqxKF2Ou7Sfuo1OoiTkpkEu/9w=
-github.com/xibodev/llm-translate v0.2.0 h1:yxV3/ll0mUYEp99Ybke9TdBlT0Bz5L6ska0IPlZO1co=
-github.com/xibodev/llm-translate v0.2.0/go.mod h1:0XVHeiJ2cuH+vSULiZt2BLolzjx7f6Y+ZLiGdpsAkxg=
+github.com/xibodev/llm-translate v0.3.0 h1:92aORYeW/M0X0RrmdFG0xW0fLc/mZw/wOiIxbJJL+HI=
+github.com/xibodev/llm-translate v0.3.0/go.mod h1:0XVHeiJ2cuH+vSULiZt2BLolzjx7f6Y+ZLiGdpsAkxg=

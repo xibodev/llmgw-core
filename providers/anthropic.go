@@ -51,18 +51,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, model string, payload 
 	if _, hasMessages := payload["messages"]; hasMessages {
 		// Convert OpenAI chat completion payload to Anthropic messages
 		msgs, _ := payload["messages"].([]map[string]any)
-		system, convMsgs := translate.OpenAIMessagesToAnthropic(msgs)
-		anthropicBody = map[string]any{
-			"model":      model,
-			"messages":   convMsgs,
-			"max_tokens": 4096,
-		}
-		if system != "" {
-			anthropicBody["system"] = system
-		}
-		if tools, ok := payload["tools"].([]any); ok && len(tools) > 0 {
-			anthropicBody["tools"] = translate.OpenAIToolsToAnthropic(tools)
-		}
+		anthropicBody = anthropicMessagesBody(model, msgs, payload)
 	} else {
 		anthropicBody = payload
 		anthropicBody["model"] = model
@@ -116,18 +105,7 @@ func (p *AnthropicProvider) Stream(ctx context.Context, model string, payload ma
 
 	var anthropicBody map[string]any
 	if msgs, ok := payload["messages"].([]map[string]any); ok {
-		system, convMsgs := translate.OpenAIMessagesToAnthropic(msgs)
-		anthropicBody = map[string]any{
-			"model":      model,
-			"messages":   convMsgs,
-			"max_tokens": 4096,
-		}
-		if system != "" {
-			anthropicBody["system"] = system
-		}
-		if tools, ok := payload["tools"].([]any); ok && len(tools) > 0 {
-			anthropicBody["tools"] = translate.OpenAIToolsToAnthropic(tools)
-		}
+		anthropicBody = anthropicMessagesBody(model, msgs, payload)
 	} else {
 		anthropicBody = payload
 		anthropicBody["model"] = model
@@ -162,6 +140,34 @@ func (p *AnthropicProvider) Stream(ctx context.Context, model string, payload ma
 	}
 
 	return newByteStreamIter(ctx, resp.Body), nil
+}
+
+// anthropicMessagesBody converts a Chat Completions payload to a Messages
+// request body.
+//
+// The conversion's loss report is neither enforced nor surfaced. This
+// provider served these requests before llm-translate reported losses, such
+// as a Gemini thought signature in the history, and its Complete and Stream
+// results have no Losses field or LossReporter to carry a report, so the
+// losses are dropped silently, as they always were.
+func anthropicMessagesBody(model string, messages []map[string]any, payload map[string]any) map[string]any {
+	converted := translate.OpenAIMessagesToAnthropicWithReport(messages).Value
+	body := map[string]any{
+		"model":      model,
+		"messages":   converted.Messages,
+		"max_tokens": 4096,
+	}
+	// The System string cannot hold the system prompt's cache_control
+	// breakpoints; SystemBlocks, set only when there are some, can.
+	if len(converted.SystemBlocks) > 0 {
+		body["system"] = converted.SystemBlocks
+	} else if converted.System != "" {
+		body["system"] = converted.System
+	}
+	if tools, ok := payload["tools"].([]any); ok && len(tools) > 0 {
+		body["tools"] = translate.OpenAIToolsToAnthropic(tools)
+	}
+	return body
 }
 
 func (p *AnthropicProvider) ListModels(ctx context.Context, cred *core.Credential) ([]core.ModelInfo, error) {

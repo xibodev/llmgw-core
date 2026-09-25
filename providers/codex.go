@@ -246,7 +246,7 @@ func (p *CodexProvider) responsesRequest(model string, payload map[string]any) (
 		}
 	}
 	converted := translate.ChatToResponsesWithReport(model, messages, options, true)
-	if err := converted.RejectMaterialLoss(); err != nil {
+	if err := translate.RejectMaterialLoss(withoutThoughtSignatures(converted.Report)); err != nil {
 		return nil, &InvocationError{Msg: "Codex request contains unsupported fields", Cause: err}
 	}
 	request := converted.Value
@@ -320,6 +320,21 @@ func (p *CodexProvider) nativeResponsesRequest(model string, payload map[string]
 	request["stream"] = true
 	request["store"] = false
 	return request, nil
+}
+
+// withoutThoughtSignatures removes dropped Gemini thought signatures from a
+// request's loss report. llm-translate counts them as material because
+// Gemini needs a signature back on its next turn, but that turn is built
+// from the caller's history, which keeps it, and Codex has no use for one.
+// Codex served such histories before the loss was reported and still does.
+func withoutThoughtSignatures(report translate.Report) translate.Report {
+	losses := make([]translate.Loss, 0, len(report.Losses))
+	for _, loss := range report.Losses {
+		if loss.Class != translate.LossDropped || !strings.HasSuffix(loss.Path, ".thought_signature") {
+			losses = append(losses, loss)
+		}
+	}
+	return translate.Report{Losses: losses}
 }
 
 func codexMessages(value any) ([]map[string]any, error) {

@@ -387,6 +387,37 @@ func TestCodexRejectsUnsupportedFieldsAndRequiresInstructions(t *testing.T) {
 	}
 }
 
+// A Gemini thought signature has no place in a Codex request, and
+// llm-translate reports dropping it as material. Codex served such
+// histories before the loss was reported, so it still serves them, at every
+// location a Gemini provider puts the signature.
+func TestCodexServesHistoriesWithThoughtSignatures(t *testing.T) {
+	bodies := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies <- string(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}}`+"\n\n")
+	}))
+	defer server.Close()
+	provider := newFixtureCodexProvider(t, server, "Required instructions")
+	_, err := provider.Complete(context.Background(), "exact-model", map[string]any{"messages": []any{
+		map[string]any{"role": "user", "content": "look it up"},
+		map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{
+			"id": "call_1", "type": "function", "thought_signature": "fixture-signature-c",
+			"function":      map[string]any{"name": "lookup", "arguments": "{}", "thought_signature": "fixture-signature-b"},
+			"extra_content": map[string]any{"google": map[string]any{"thought_signature": "fixture-signature-a"}},
+		}}},
+		map[string]any{"role": "tool", "tool_call_id": "call_1", "content": "found"},
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := <-bodies; strings.Contains(body, "fixture-signature") || !strings.Contains(body, `"function_call"`) {
+		t.Fatalf("upstream request = %s, want the tool call without its signatures", body)
+	}
+}
+
 func TestCodexRequiresClientVersionAndSendsItToTheCatalog(t *testing.T) {
 	source := NewCodexTokenSessionSource(auth.NewStaticTokenSource(&auth.Token{AccessToken: "fixture"}), "")
 	for _, version := range []string{"", " \t"} {

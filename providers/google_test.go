@@ -322,3 +322,57 @@ func TestGoogleStreamRefusesAndSendsNothing(t *testing.T) {
 		t.Fatalf("upstream = %+v", calls)
 	}
 }
+
+// googleRecorder records the URL of every request and answers with a body
+// that serves both a model action and either catalog.
+type googleRecorder struct {
+	mu   sync.Mutex
+	urls []string
+}
+
+func (r *googleRecorder) RoundTrip(request *http.Request) (*http.Response, error) {
+	r.mu.Lock()
+	r.urls = append(r.urls, request.URL.String())
+	r.mu.Unlock()
+	return &http.Response{
+		StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {core.ContentTypeJSON}}, Request: request,
+		Body: io.NopCloser(strings.NewReader(`{"candidates":[{"content":{"parts":[{"text":"ok"}]}}],"models":[],"publisherModels":[]}`)),
+	}, nil
+}
+
+// Without a base URL, inference and discovery reach Google's own hosts: a
+// regional location prefixes the Vertex AI host of both, and discovery
+// speaks v1beta1 where inference speaks v1.
+func TestGoogleDefaultEndpoints(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		config GoogleConfig
+		urls   []string
+	}{
+		{GoogleConfig{Deployment: GoogleAIStudio}, []string{
+			"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
+			"https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
+		}},
+		{GoogleConfig{Deployment: GoogleVertexAI, Project: "p"}, []string{
+			"https://aiplatform.googleapis.com/v1/projects/p/locations/global/publishers/google/models/gemini-3.5-flash:generateContent",
+			"https://aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=200",
+		}},
+		{GoogleConfig{Deployment: GoogleVertexAI, Project: "p", Location: "us-central1"}, []string{
+			"https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/google/models/gemini-3.5-flash:generateContent",
+			"https://us-central1-aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=200",
+		}},
+	} {
+		recorder := &googleRecorder{}
+		testCase.config.Client = &http.Client{Transport: recorder}
+		provider := newGoogleTest(t, testCase.config)
+		if _, err := provider.Invoke(context.Background(), googleChatRequest("gemini-3.5-flash", `{"messages":[]}`, googleBearer("t"))); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := provider.ListModels(context.Background(), googleBearer("t")); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(recorder.urls, testCase.urls) {
+			t.Fatalf("%+v reached %v, want %v", testCase.config, recorder.urls, testCase.urls)
+		}
+	}
+}

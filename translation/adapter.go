@@ -72,6 +72,11 @@ func (a Adapter) ListModels(ctx context.Context, credential *core.Credential) ([
 	return a.Provider.ListModels(ctx, credential)
 }
 
+// Unwrap returns the wrapped provider. The adapter hands it the requests of
+// its native surfaces unchanged, so core.PreservesWire and core.CountTokens
+// read the wrapped provider's declarations through the adapter.
+func (a Adapter) Unwrap() core.Provider { return a.Provider }
+
 func (a Adapter) route(model string, surface core.ModelSurface) (route, bool) {
 	for _, candidate := range routes() {
 		if candidate.from == surface && core.ServesNatively(a.Provider, model, candidate.target) {

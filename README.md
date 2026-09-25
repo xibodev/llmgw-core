@@ -284,6 +284,64 @@ rt, err := runtime.New(runtime.Options[Settings]{
 `CodexProvider`, which reads tokens from a session source, is deprecated.
 It shares the transport, so both send identical requests.
 
+## Antigravity
+
+`providers.Antigravity` is the Google Antigravity vertical on the provider
+contract, over the undocumented Cloud Code Assist API: Chat, image
+generation, the catalog and what its rows mean, the project each credential
+uses, and, with `NewAntigravityRefresh`, the credential refresh.
+
+```go
+rt, err := runtime.New(runtime.Options[Settings]{
+    Settings: settingsSource,
+    Providers: func(s Settings, instance string) (core.Provider, error) {
+        antigravity, err := providers.NewAntigravity(providers.AntigravityConfig{
+            ProjectResolved: storeProject, // optional: keep a discovered project
+        })
+        if err != nil {
+            return nil, err
+        }
+        return translation.Adapter{Provider: antigravity}, nil // Messages over Chat
+    },
+    Refresh: func(s Settings, instance string) tokenstore.RefreshFunc {
+        return providers.NewAntigravityRefresh(antigravityauth.Config{
+            ClientID: s.ClientID, ClientSecret: s.ClientSecret,
+            ClientAuthMode: antigravityauth.ClientAuthModeClientSecretPost,
+        })
+    },
+    Credentials: credentialStore,
+})
+```
+
+- **Credential.** The token is the bearer, and the project is the one the
+  credential's metadata names under `core.CredentialMetadataProjectID`.
+  When it names none, Antigravity discovers it and, once the operation
+  succeeds, hands it to `ProjectResolved`, for the product to store with a
+  revision-fenced write. A credential without a token is a configuration
+  error, and nothing is sent.
+- **Surfaces.** Chat Completions only, sent exactly as the gateway sends
+  it: the messages, `max_tokens`, `temperature` and `tools` are mapped to
+  Gemini, and every other field is dropped and reported as a loss, a
+  material one when it changes the answer's structure. Antigravity does not
+  stream: it reads Cloud Code Assist's stream to its end, so `Stream`
+  refuses and permits failover. `GenerateImages` implements
+  `core.ImageGenerator`, one image from a model both catalog rosters name.
+- **Catalog.** Every model in the root roster serves Chat, and one the
+  image roster names also serves image generation. No row streams, and what
+  the catalog omits stays unknown.
+- **Refresh.** A rejected token fails with status 401, so the Runtime
+  refreshes once and replays. Each credential refreshes with the OAuth
+  client its `core.CredentialMetadataOAuthProfile` selects, as the gateway
+  selects it, falling back to the configured client. It keeps its account
+  and project, unless the new token discovers another project. A grant the
+  token endpoint rejects for good fails without revoking the credential, as
+  in the gateway; `providers.AntigravityRevokeOnTerminal()` revokes it.
+- **Errors** are `*core.ProviderError`, with the transport's
+  `*core.ProviderOperationError` as the cause.
+
+`ExperimentalAntigravityProvider`, which reads tokens from a token source,
+is deprecated. It shares the transport, so both send identical requests.
+
 ## Execution
 
 `execution` holds the primitives failover is built from. Endpoints, policy

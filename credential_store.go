@@ -14,10 +14,10 @@ import (
 // rather than an OAuth access token.
 const TokenTypeAPIKey = "api_key"
 
-// Metadata keys under which a record carries what its OAuth grant needs
-// later, the way the gateway's credential store keeps them. A refresh reads
-// them so each credential refreshes with the client it was granted to, not
-// whichever client is configured now.
+// Metadata keys under which a record carries what its OAuth grant and its
+// provider need later, the way the gateway's credential store keeps them. A
+// refresh reads them so each credential refreshes with the client it was
+// granted to, not whichever client is configured now.
 const (
 	// CredentialMetadataOAuthProfile names how the owner signed in, such as
 	// a device or a browser login. The provider defines the values.
@@ -35,6 +35,10 @@ const (
 	// CredentialMetadataAccountLabel is a label for the account, such as an
 	// email address, for display.
 	CredentialMetadataAccountLabel = "account_label"
+	// CredentialMetadataProjectID is the upstream project the credential's
+	// calls are billed to, such as the Code Assist project of an Antigravity
+	// login. A provider that discovers it lets the product store it here.
+	CredentialMetadataProjectID = "project_id"
 )
 
 // ErrNoCredential reports that no credential resolves for a caller and a

@@ -1,0 +1,127 @@
+[
+  {
+    "id": "fixture-bare",
+    "object": "model",
+    "created": 0,
+    "owned_by": "google-antigravity",
+    "supported_apis": [
+      "/v1/chat/completions"
+    ],
+    "capabilities": {
+      "schema_version": 1,
+      "operations": {
+        "chat": "supported",
+        "embeddings": "unknown",
+        "image": "unknown",
+        "audio_in": "unknown",
+        "audio_out": "unknown",
+        "video": "unknown",
+        "token_count": "unknown"
+      },
+      "surfaces": {
+        "chat_completions": "supported",
+        "responses": "unknown",
+        "messages": "unknown"
+      },
+      "inputs": {
+        "text": "supported",
+        "image": "unknown"
+      },
+      "tools": "unknown",
+      "reasoning": "unknown",
+      "structured_output": "unknown",
+      "streaming": "unsupported",
+      "stateful_responses": "unknown",
+      "limits": {},
+      "provenance": {
+        "source": "inferred",
+        "confidence": "medium"
+      },
+      "freshness": {}
+    }
+  },
+  {
+    "id": "fixture-named",
+    "object": "model",
+    "created": 0,
+    "owned_by": "google-antigravity",
+    "description": "Fixture Named",
+    "supported_apis": [
+      "/v1/chat/completions"
+    ],
+    "capabilities": {
+      "schema_version": 1,
+      "operations": {
+        "chat": "supported",
+        "embeddings": "unknown",
+        "image": "unknown",
+        "audio_in": "unknown",
+        "audio_out": "unknown",
+        "video": "unknown",
+        "token_count": "unknown"
+      },
+      "surfaces": {
+        "chat_completions": "supported",
+        "responses": "unknown",
+        "messages": "unknown"
+      },
+      "inputs": {
+        "text": "supported",
+        "image": "unknown"
+      },
+      "tools": "unknown",
+      "reasoning": "unknown",
+      "structured_output": "unknown",
+      "streaming": "unsupported",
+      "stateful_responses": "unknown",
+      "limits": {},
+      "provenance": {
+        "source": "inferred",
+        "confidence": "medium"
+      },
+      "freshness": {}
+    }
+  },
+  {
+    "id": "fixture-unrostered-image",
+    "object": "model",
+    "created": 0,
+    "owned_by": "google-antigravity",
+    "description": "Fixture Unrostered Image",
+    "supported_apis": [
+      "/v1/chat/completions"
+    ],
+    "capabilities": {
+      "schema_version": 1,
+      "operations": {
+        "chat": "supported",
+        "embeddings": "unknown",
+        "image": "unknown",
+        "audio_in": "unknown",
+        "audio_out": "unknown",
+        "video": "unknown",
+        "token_count": "unknown"
+      },
+      "surfaces": {
+        "chat_completions": "supported",
+        "responses": "unknown",
+        "messages": "unknown"
+      },
+      "inputs": {
+        "text": "supported",
+        "image": "unknown"
+      },
+      "tools": "unknown",
+      "reasoning": "unknown",
+      "structured_output": "unknown",
+      "streaming": "unsupported",
+      "stateful_responses": "unknown",
+      "limits": {},
+      "provenance": {
+        "source": "inferred",
+        "confidence": "medium"
+      },
+      "freshness": {}
+    }
+  }
+]

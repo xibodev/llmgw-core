@@ -100,8 +100,7 @@ func TestEdgeTTSReadsTheAnswerAsTheGatewayDoes(t *testing.T) {
 // caller gave up on permits nothing.
 func TestEdgeTTSGivesUpWhenItsDeadlineOrTheCallerDoes(t *testing.T) {
 	t.Parallel()
-	stalled := []edgeTTSAnswer{{frames: []edgeTTSFrame{edgeTTSAudioFrame("A")}}}
-	deadline := &edgeTTSService{answers: stalled}
+	deadline := &edgeTTSService{answers: []edgeTTSAnswer{{frames: []edgeTTSFrame{edgeTTSAudioFrame("A")}}}}
 	provider := newFixtureEdgeTTS(t, deadline, func(config *EdgeTTSConfig) { config.Timeout = 20 * time.Millisecond })
 	_, err := provider.Synthesize(t.Context(), nil, "", "hello", "")
 	var failure *core.ProviderError
@@ -109,11 +108,11 @@ func TestEdgeTTSGivesUpWhenItsDeadlineOrTheCallerDoes(t *testing.T) {
 		failure.Classification != (core.ProviderErrorClassification{Retryable: true, FailoverEligible: true, CircuitFailure: true}) {
 		t.Fatalf("deadline: err = %#v", err)
 	}
-	caller := &edgeTTSService{answers: stalled}
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
+	caller := &edgeTTSService{answers: []edgeTTSAnswer{{frames: []edgeTTSFrame{edgeTTSAudioFrame("A")}, stalled: cancel}}}
 	_, err = newFixtureEdgeTTS(t, caller).Synthesize(ctx, nil, "", "hello", "")
-	if !errors.As(err, &failure) || failure.Classification != (core.ProviderErrorClassification{}) || !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+	if !errors.As(err, &failure) || failure.Classification != (core.ProviderErrorClassification{}) || !errors.Is(ctx.Err(), context.Canceled) {
 		t.Fatalf("caller: err = %#v", err)
 	}
 	for _, service := range []*edgeTTSService{deadline, caller} {

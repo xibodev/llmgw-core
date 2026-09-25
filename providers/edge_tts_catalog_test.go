@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -40,7 +41,7 @@ func edgeTTSVoiceList(t *testing.T, answer func(w http.ResponseWriter, attempt i
 	return provider, func() []*http.Request {
 		mu.Lock()
 		defer mu.Unlock()
-		return requests
+		return slices.Clone(requests)
 	}
 }
 

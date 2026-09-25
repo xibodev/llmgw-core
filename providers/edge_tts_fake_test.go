@@ -41,12 +41,13 @@ func edgeTTSTurnEnd() edgeTTSFrame {
 // edgeTTSAnswer is how the scripted service answers one dial: a refused
 // handshake, a transport failure, or a connection that sends frames once
 // it has read the speech configuration and the SSML, and then waits until
-// it is closed.
+// it is closed, calling stalled, when set, as it starts to wait.
 type edgeTTSAnswer struct {
-	status int
-	header http.Header
-	err    error
-	frames []edgeTTSFrame
+	status  int
+	header  http.Header
+	err     error
+	frames  []edgeTTSFrame
+	stalled func()
 }
 
 // edgeTTSDialed is one dial the scripted service received.
@@ -100,7 +101,7 @@ func (s *edgeTTSService) dial(_ context.Context, url string, header http.Header,
 	case answer.err != nil:
 		return nil, nil, answer.err
 	}
-	conn := &edgeTTSConn{frames: slices.Clone(answer.frames), closed: make(chan struct{})}
+	conn := &edgeTTSConn{frames: slices.Clone(answer.frames), stalled: answer.stalled, closed: make(chan struct{})}
 	s.conns = append(s.conns, conn)
 	return conn, &http.Response{StatusCode: http.StatusSwitchingProtocols, Header: http.Header{}, Body: body}, nil
 }
@@ -118,6 +119,7 @@ type edgeTTSConn struct {
 	mu      sync.Mutex
 	written [][]byte
 	frames  []edgeTTSFrame
+	stalled func()
 	closes  int
 	closed  chan struct{}
 }
@@ -144,7 +146,11 @@ func (c *edgeTTSConn) Read(context.Context) (int, []byte, error) {
 		c.mu.Unlock()
 		return frame.kind, frame.data, nil
 	}
+	stalled := c.stalled
 	c.mu.Unlock()
+	if stalled != nil {
+		stalled()
+	}
 	<-c.closed
 	return 0, nil, errors.New("read on a closed connection")
 }

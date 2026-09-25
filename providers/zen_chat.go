@@ -149,7 +149,7 @@ func (p *Zen) streamChat(ctx context.Context, call zenCall) (core.StreamIter, er
 	if err != nil {
 		return nil, err
 	}
-	return &zenStream{events: &zenChatStream{ctx: ctx, body: stream, reader: newZenSSEReader(stream)}, losses: losses}, nil
+	return &zenStream{events: &zenChatStream{ctx: ctx, body: stream, reader: newSSERecordReader(stream)}, losses: losses}, nil
 }
 
 // readZenChat reads a Chat completion and returns it unchanged once it
@@ -200,7 +200,7 @@ func zenSoftError(response map[string]any) bool {
 // and reasoning. Like the gateway it keeps no tool call and finishes with
 // "stop". A stream without content fails, and may be retried.
 func (p *Zen) assembleChat(ctx context.Context, body io.Reader, model string) ([]byte, error) {
-	reader := newZenSSEReader(body)
+	reader := newSSERecordReader(body)
 	var id, responseModel string
 	var created float64
 	var content, reasoning strings.Builder

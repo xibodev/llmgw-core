@@ -83,7 +83,7 @@ func TestZenResponsesStreamFailsWithoutATerminalEvent(t *testing.T) {
 	t.Parallel()
 	for name, events := range map[string]string{
 		"no terminal":      "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_fixture\"}}\n\n",
-		"oversized record": "data: {\"type\":\"response.created\"}\n\ndata: \"" + strings.Repeat("x", zenMaxRecordBytes) + "\"\n\n",
+		"oversized record": "data: {\"type\":\"response.created\"}\n\ndata: \"" + strings.Repeat("x", maxStreamRecordWireSize) + "\"\n\n",
 	} {
 		backend := &zenBackend{reply: func(w http.ResponseWriter, _ *http.Request, _ int) { _, _ = io.WriteString(w, events) }}
 		server := httptest.NewServer(backend)
@@ -96,6 +96,10 @@ func TestZenResponsesStreamFailsWithoutATerminalEvent(t *testing.T) {
 		var failure *core.ProviderError
 		if !strings.HasPrefix(frames, "data: {\"type\":\"response.created\"") || !errors.As(err, &failure) || failure.Class != core.ProviderErrorUpstream {
 			t.Fatalf("%s: frames = %.80q, err = %v", name, frames, err)
+		}
+		if name == "oversized record" && (failure.Error() != "an OpenCode Zen stream record exceeds the size limit" ||
+			failure.Classification != (core.ProviderErrorClassification{FailoverEligible: true, CircuitFailure: true})) {
+			t.Fatalf("oversized record: %q classified %+v", failure.Error(), failure.Classification)
 		}
 		server.Close()
 	}

@@ -148,6 +148,69 @@ Products supply three stores, each with an in-memory reference implementation:
 - **`EvidenceSink`** receives `AccountEvidence`: which credential served which
   operation, and the classified outcome. Reference: `MemoryEvidenceSink`.
 
+### M5 foundations
+
+The API the remaining transports build on. All of it is additive: no
+existing vertical sends, returns or classifies anything differently.
+
+```go
+// package core
+type ModelInfo struct {
+    // ... the fields above, unchanged ...
+    DisplayName        string         `json:"display_name,omitempty"`
+    Vendor             string         `json:"vendor,omitempty"`
+    Free               bool           `json:"free,omitempty"`
+    LegacyCapabilities map[string]any `json:"legacy_capabilities,omitempty"`
+}
+func AdaptModelCapabilities(legacy map[string]any, surfaces []string, discoveredAt, verifiedAt time.Time) *ModelCapabilities
+func InferCapabilities(model ModelInfo, discoveredAt, verifiedAt time.Time) *ModelCapabilities
+
+type WirePreserver interface{ PreservesWire(model string, surface ModelSurface) bool }
+func PreservesWire(provider Provider, model string, surface ModelSurface) bool
+
+type TokenCounter interface {
+    CountTokens(ctx context.Context, request TokenCountRequest) (TokenCount, error)
+}
+type TokenCountRequest struct { Request; Header http.Header }
+type TokenCount struct{ InputTokens int64 }
+func CountTokens(ctx context.Context, provider Provider, request TokenCountRequest) (TokenCount, error)
+var ErrTokenCountUnsupported error
+
+const TokenTypeGCPServiceAccount = "gcp_service_account"
+const TokenTypeAnthropicSetupToken = "anthropic_setup_token"
+```
+
+- **Rows.** A gateway catalog row maps field for field: `Label` is
+  `DisplayName`, `Capabilities` is `LegacyCapabilities`, `TypedCapabilities`
+  is `Capabilities`, and `SupportedSurfaces` is `SupportedAPIs`.
+- **Capabilities.** `AdaptModelCapabilities` is the gateway's inference,
+  ported verbatim: inferred, medium confidence, and no expiry.
+  `InferCapabilities` applies it to a row and ignores the row's own
+  `Capabilities`.
+- **Preservation.** `PreservesWire` is true when every layer serves the
+  surface natively and the nearest `WirePreserver` says so. Serving Chat
+  natively by converting it, as Codex does, is not preserving it, and a
+  response transport label reads only this declaration. A decorator exposes
+  what it wraps through `Unwrap() Provider`, as `translation.Adapter` does.
+- **Token counts.** `CountTokens` finds the nearest `TokenCounter` the same
+  way. `ErrTokenCountUnsupported` tells a product to estimate instead.
+- **Credential kinds.** A credential whose `TokenType` names one carries the
+  material in `Token` and its extras, such as `CredentialMetadataProjectID`,
+  in `Metadata`. The material is no bearer token, so bind it only to a
+  provider that serves its kind.
+- **Wire kit.** Package `providers` shares the gateway's transport helpers
+  with the verticals it holds:
+  - `readInvocationResponseBody` reads an answer within 64 MiB, and
+    `decodeCatalogResponse` a catalog within 8 MiB, checking every row.
+  - `sseRecordReader` reads SSE records within 4 MiB with their bytes as
+    sent, `sseFrameStream` relays them, and `readBoundedLine` bounds NDJSON.
+  - `httpStatusFailure` reports a refused answer classified by the gateway's
+    status set, with `Retry-After`. Its message never quotes the upstream;
+    the cause holds the redacted diagnostic.
+  - `extractError`, `retryAfterDelay`, `transportFailure`, `streamFailure`
+    and `catalogFailure` complete it. A catalog failure's `*CatalogError`
+    has a `CatalogCode*` code: the gateway's, without its `catalog_` prefix.
+
 ## Runtime
 
 `runtime.Runtime` is the one value that owns a product's provider state: the

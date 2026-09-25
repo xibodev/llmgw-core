@@ -1,94 +1,20 @@
 package providers
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"slices"
-	"strings"
 
 	core "github.com/xibodev/llmgw-core"
 )
 
-var errZenRecordTooLarge = errors.New("an OpenCode Zen stream record exceeds 4 MiB")
-
-// zenRecord is one SSE record that carries data: its bytes as Zen sent
-// them, and its data lines joined.
-type zenRecord struct {
-	frame []byte
-	data  string
-}
-
-// zenSSEReader reads Zen's streams as the gateway reads them. A record
-// without data, such as a comment or a keepalive, is skipped, as is one
-// whose data is empty. A record is bounded to 4 MiB of wire bytes, its
-// ignored fields and blank line included. A last record without its blank
-// line still counts, and its frame gets the line ending it lacks, so every
-// frame is a complete record.
-type zenSSEReader struct{ reader *bufio.Reader }
-
-func newZenSSEReader(body io.Reader) *zenSSEReader {
-	return &zenSSEReader{reader: bufio.NewReader(body)}
-}
-
-func (r *zenSSEReader) Next() (zenRecord, error) {
-	var frame []byte
-	var data []string
-	for {
-		line, err := r.line(zenMaxRecordBytes - len(frame))
-		if err != nil && err != io.EOF {
-			return zenRecord{}, err
-		}
-		frame = append(frame, line...)
-		if content, ended := strings.CutSuffix(string(line), "\n"); len(line) > 0 {
-			if ended {
-				content = strings.TrimSuffix(content, "\r")
-			}
-			switch {
-			case content == "":
-				if payload := strings.Join(data, "\n"); payload != "" {
-					return zenRecord{frame: frame, data: payload}, nil
-				}
-				frame, data = nil, nil
-			case content[0] != ':':
-				field, value, _ := strings.Cut(content, ":")
-				if field == "data" {
-					data = append(data, strings.TrimPrefix(value, " "))
-				}
-			}
-		}
-		if err == io.EOF {
-			if payload := strings.Join(data, "\n"); payload != "" {
-				if !strings.HasSuffix(string(frame), "\n") {
-					frame = append(frame, '\n')
-				}
-				return zenRecord{frame: append(frame, '\n'), data: payload}, nil
-			}
-			return zenRecord{}, io.EOF
-		}
-	}
-}
-
-// line reads one line of at most limit bytes.
-func (r *zenSSEReader) line(limit int) ([]byte, error) {
-	var line []byte
-	for {
-		fragment, err := r.reader.ReadSlice('\n')
-		if len(fragment) > limit-len(line) {
-			return nil, errZenRecordTooLarge
-		}
-		line = append(line, fragment...)
-		if err != bufio.ErrBufferFull {
-			return line, err
-		}
-	}
-}
-
-// zenStreamFailure reports a stream that broke after it opened.
+// zenStreamFailure reports a stream that broke after it opened. Zen's
+// streams are read with sseRecordReader, as the gateway reads them.
 func zenStreamFailure(ctx context.Context, err error) error {
-	if errors.Is(err, errZenRecordTooLarge) {
+	var tooLarge *streamRecordTooLargeError
+	if errors.As(err, &tooLarge) {
 		return zenUpstreamError("an OpenCode Zen stream record exceeds the size limit", false, err)
 	}
 	return zenFailure(ctx, zenTransportError(ctx, "the OpenCode Zen stream failed", err))
@@ -114,7 +40,7 @@ func (s *zenStream) Losses() []core.Loss { return slices.Clone(s.losses) }
 type zenChatStream struct {
 	ctx    context.Context
 	body   io.ReadCloser
-	reader *zenSSEReader
+	reader *sseRecordReader
 }
 
 func (s *zenChatStream) Next() ([]byte, error) {
@@ -139,7 +65,7 @@ func (s *zenChatStream) Close() error { return s.body.Close() }
 type zenResponsesStream struct {
 	ctx    context.Context
 	body   io.ReadCloser
-	reader *zenSSEReader
+	reader *sseRecordReader
 	done   bool
 }
 

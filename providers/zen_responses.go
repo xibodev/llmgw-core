@@ -222,7 +222,7 @@ func (p *Zen) streamResponses(ctx context.Context, call zenCall) (core.StreamIte
 		raw, _ := readZenResponse(ctx, response)
 		return nil, p.statusError(ctx, response, raw, call)
 	}
-	return &zenStream{events: &zenResponsesStream{ctx: ctx, body: response.Body, reader: newZenSSEReader(response.Body)}}, nil
+	return &zenStream{events: &zenResponsesStream{ctx: ctx, body: response.Body, reader: newSSERecordReader(response.Body)}}, nil
 }
 
 // zenFinalResponse assembles an anonymous response from its events, as the

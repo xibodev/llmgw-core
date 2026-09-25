@@ -18,12 +18,9 @@ import (
 // zenPublicBearer is the Authorization the OpenCode CLI sends without a key.
 const zenPublicBearer = "Bearer public"
 
-// The gateway's bounds on what Zen returns: a complete response, and all
-// the wire bytes of one stream record.
-const (
-	zenMaxResponseBytes = 64 << 20
-	zenMaxRecordBytes   = 4 << 20
-)
+// zenMaxResponseBytes is the gateway's bound on a complete Zen response. A
+// stream record has the shared bound, maxStreamRecordWireSize.
+const zenMaxResponseBytes = 64 << 20
 
 // zenAccess is how one operation authenticates.
 type zenAccess struct {

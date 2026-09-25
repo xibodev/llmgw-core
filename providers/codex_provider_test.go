@@ -66,6 +66,10 @@ func TestNewCodexRequiresInstructionsAndClientVersion(t *testing.T) {
 	if _, err := NewCodex(CodexConfig{Instructions: "required", ClientVersion: " "}); err == nil || err.Error() != "Codex client version is required" {
 		t.Fatalf("missing client version: err = %v", err)
 	}
+	// The verified version is there to pass, not a default.
+	if _, err := NewCodex(CodexConfig{Instructions: "required", ClientVersion: CodexVerifiedClientVersion}); err != nil {
+		t.Fatalf("verified client version: err = %v", err)
+	}
 }
 
 // The same payload must reach Codex identically through both provider APIs:

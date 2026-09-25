@@ -268,7 +268,9 @@ rt, err := runtime.New(runtime.Options[Settings]{
   to a `translation.Adapter` and the product's loss policy instead.
 - **Catalog.** `ListModels` returns only rows supported in the API and
   listed. A row that omits `supported_endpoints`, as current catalogs do,
-  gets `/responses`.
+  gets `/responses`. The parser was verified against the catalog of
+  `providers.CodexVerifiedClientVersion`; it is not a default, and
+  `ClientVersion` must still be set.
 - **Refresh.** A rejected token fails with status 401, so the Runtime
   refreshes once and replays. Each credential refreshes with the OAuth client
   its metadata names (`core.CredentialMetadataOAuthClientID`, falling back

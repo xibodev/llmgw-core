@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	core "github.com/xibodev/llmgw-core"
@@ -82,5 +83,27 @@ func TestOpenAICompatibleServesResponsesForTheOfficialOpenAIEntry(t *testing.T) 
 	if calls := backend.take(); len(calls) != 1 || calls[0].path != "/v1/responses" ||
 		calls[0].body != `{"input":"hi","model":"future-model","stream":false}` || calls[0].method != http.MethodPost {
 		t.Fatalf("upstream = %+v", calls)
+	}
+}
+
+// Only adaptation reads the catalog row of a Chat request, so a product's
+// lookup, which may load a stored catalog, is not made for every request.
+func TestOpenAICompatibleLooksChatUpOnlyToAdaptIt(t *testing.T) {
+	t.Parallel()
+	_, server := newOpenAIBackend(t, answerOpenAIChat)
+	var lookups atomic.Int32
+	provider := newTestOpenAICompatible(t, server, func(config *OpenAICompatibleConfig) {
+		config.Models = func(model string) (core.ModelInfo, bool) {
+			lookups.Add(1)
+			return openAIResponsesOnly(model)
+		}
+	})
+	chat := openAIRequest(core.ModelSurfaceChatCompletions, "chat-fixture", `{"messages":[]}`, nil)
+	if _, err := provider.Invoke(context.Background(), chat); err != nil || lookups.Load() != 0 {
+		t.Fatalf("lookups = %d, err = %v", lookups.Load(), err)
+	}
+	chat.Body = []byte(`{"messages":[],"force_api_support":true}`)
+	if _, err := provider.Invoke(context.Background(), chat); err != nil || lookups.Load() != 1 {
+		t.Fatalf("adapted: lookups = %d, err = %v", lookups.Load(), err)
 	}
 }

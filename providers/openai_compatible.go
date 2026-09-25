@@ -222,14 +222,20 @@ func (p *OpenAICompatible) responsesNative(model string) bool {
 	return ok && slices.ContainsFunc(row.SupportedAPIs, openAIResponsesEndpoint)
 }
 
+// adaptedRow returns the row adaptation reads for model, and nothing when
+// adaptation is off, so that no catalog lookup is made for it.
+func (p *OpenAICompatible) adaptedRow(model string, adapt bool) (core.ModelInfo, bool) {
+	if !adapt {
+		return core.ModelInfo{}, false
+	}
+	return p.row(model)
+}
+
 // adaptsToResponses reports Chat that adaptation serves over Responses: a
 // model whose row lists Responses but not Chat Completions, as
 // translate.PreferredEndpoint reads the row.
 func (p *OpenAICompatible) adaptsToResponses(model string, adapt bool) bool {
-	if !adapt {
-		return false
-	}
-	row, ok := p.row(model)
+	row, ok := p.adaptedRow(model, adapt)
 	return ok && translate.PreferredEndpoint(row.SupportedAPIs) == "responses"
 }
 

@@ -97,10 +97,12 @@ func (p *OpenAICompatible) chat(call openAICompatibleCall, stream bool) (openAIC
 	if limit := call.payload[openAIOutputLimit]; limit != nil && options["max_tokens"] == nil && options["max_completion_tokens"] == nil {
 		options["max_completion_tokens"] = limit
 	}
-	if p.adaptsToResponses(call.model, adapt) {
-		return p.chatOverResponses(call.model, messages, options, marked, losses)
-	}
-	if row, known := p.row(call.model); adapt && known {
+	// Only adaptation reads the row, so a Chat request that is not adapted
+	// costs the product no catalog lookup.
+	if row, known := p.adaptedRow(call.model, adapt); known {
+		if translate.PreferredEndpoint(row.SupportedAPIs) == "responses" {
+			return p.chatOverResponses(call.model, messages, options, marked, losses)
+		}
 		_, reasoning := row.LegacyCapabilities["reasoning_effort"]
 		if maxTokens, present := options["max_tokens"]; present && reasoning {
 			options["max_completion_tokens"] = maxTokens

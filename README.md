@@ -207,6 +207,43 @@ if err != nil {
 defer result.Value.Close()
 ```
 
+## OAuth flows
+
+`oauthflow.Service` runs the server-side sign-in flows both products expose:
+browser authorization codes with PKCE, device authorization, and codes the
+user pastes back. Products keep their HTTP routes and map each onto one call:
+
+```go
+svc, err := oauthflow.New(oauthflow.Options{
+    // Or a shared store. The memory store can cap each caller's pending flows.
+    Store:         oauthflow.NewMemoryFlowStore(oauthflow.MemoryFlowStoreOptions{MaxFlowsPerCaller: 5}),
+    Credentials:   credentialStore, // core.CredentialStore
+    Drivers:       driverFor,       // (instance, method) -> Driver
+    CredentialKey: keyFor,          // product policy
+})
+view, err := svc.Start(ctx, caller, "antigravity", oauthflow.MethodBrowser,
+    oauthflow.WithRedirectURI(callbackURL))
+view, err = svc.Callback(ctx, oauthflow.CompleteInput{Code: code, State: state})
+```
+
+- A `FlowStore` binds each flow to the whole `Caller` that started it. Another
+  caller gets `ErrFlowNotFound`, as if the flow did not exist.
+- `Consume` is atomic and single-use, and an expired flow is never consumed.
+  Run `oauthflowtest.Run` against every implementation.
+- `Poll` never asks the provider more often than the flow's interval, even
+  across processes, and honours `slow_down`.
+- `Complete` and `Callback` consume the flow before the code exchange, so a
+  code is used at most once even when the exchange fails. A pasted redirect
+  URL whose state does not match spends nothing, so the user can paste again.
+- Verifiers, OAuth states, device codes and tokens stay on the server. The
+  returned `View` never holds them.
+- Credentials are saved through `CredentialStore.Save` under a key the product
+  chooses.
+- `BrowserPKCE` is a ready driver over llm-provider-auth's `browseroauth`.
+
+The package documentation maps each gateway and Facet Studio route onto the
+Service.
+
 ## License
 
 MIT

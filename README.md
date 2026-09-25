@@ -847,6 +847,74 @@ if err != nil {
 defer result.Value.Close()
 ```
 
+### Per-instance resilience
+
+`execution.Resilient(provider, key, policy)` guards one instance, as the
+gateway's resilience wrapper did:
+
+- While `policy.Health` reports the key unavailable, every operation fails
+  with a `*CircuitOpenError`, a 503 that permits failover, and nothing is
+  sent.
+- A try whose failure is retryable repeats up to `Retry.Attempts`, waiting
+  `ExponentialBackoff` or a longer Retry-After. A stream repeats only its
+  opening. `RepeatableRequest` never repeats a stateful Responses request,
+  or one that may pay for a second result, such as an image.
+- The outcome of each operation's last try moves the circuit. `ListModels`
+  passes through, and the wrapper unwraps, so wire preservation and token
+  counts read the provider's declarations.
+- `TransientClassification` is the gateway's reading, which a policy opts
+  into: only 408, 429, 500, 502, 503 and 504 repeat, and every repeat counts
+  against the circuit. Core's default reading is unchanged.
+
+`runtime.Options.Policy` returns an instance's `runtime.Policy`, and the
+Runtime wraps the provider it binds. Its circuits live in one tracker it
+owns, keyed by instance, so they outlive settings changes:
+
+```go
+Policy: func(s Settings, instance string) runtime.Policy {
+    p := s.PolicyFor(instance) // the gateway's retry and circuit settings
+    return runtime.Policy{
+        Retry: execution.Retry{Attempts: p.RetryMaxAttempts,
+            Delay: execution.ExponentialBackoff(p.InitialBackoff, p.Multiplier, p.MaxBackoff)},
+        Circuit: execution.HealthPolicy{FailureThreshold: p.CircuitFailureThreshold,
+            OpenDuration: p.CircuitCooldown, IgnoreRetryAfter: true},
+        Classify: execution.TransientClassification,
+    }
+},
+```
+
+## Anonymous providers
+
+`anonymous.Orchestrator` runs the automation that connects the reviewed
+anonymous providers. For each profile it enrolls the provider, claims its
+daily check, discovers the admitted catalog, probes every model with
+`Reply with: ok`, and publishes only the targets that answered.
+
+```go
+orchestrator, err := anonymous.New(anonymous.Options{
+    Catalog: catalog, // Discover(ctx, caller, instance): the admitted models, read now
+    Invoker: rt,      // a runtime.Runtime: probes run under each instance's policy
+    Hooks:   hooks,   // Enabled, Enroll, Claim, Generation, Record
+})
+stop := orchestrator.Start(ctx, time.Hour, wake) // at once, hourly, and on wake
+defer stop()
+```
+
+- **Hooks** keep policy and persistence in the product: the gate, enrolling
+  a provider in its configuration, the durable claim, the evidence
+  generation, and recording each `Result`.
+- **Probes** cover every discovered model, or with `ProbeVerificationModel`
+  the reviewed default. A probe keeps its status and Retry-After, so a 401
+  reads as a rejection and a 429 as retryable.
+- **Results** carry the gateway's report: status, authentication state,
+  catalog and completion evidence, counts, failure code, retryability and the
+  targets. `ConnectAll` is the manual run, which consults neither the gate
+  nor the claim.
+
+`providers.AutoConnectAnonymousProviders` and
+`providers.NewAnonymousOpenAICompatibleAdapter` are deprecated in its
+favour.
+
 ## OAuth flows
 
 `oauthflow.Service` runs the server-side sign-in flows both products expose:

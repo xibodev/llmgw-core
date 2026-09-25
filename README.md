@@ -384,6 +384,56 @@ return translation.Adapter{Provider: provider}, nil // Messages over Chat
 The `zen.Client` discovery and completion methods are deprecated. They share
 the normalizer, admission and identity code, and behave as before.
 
+## GitHub Copilot
+
+`providers.Copilot` is the GitHub Copilot vertical on the provider
+contract: the session exchange, request shaping, the catalog and what its
+rows mean. It is configured through llm-provider-auth's `copilot` client.
+
+```go
+Providers: func(s Settings, instance string) (core.Provider, error) {
+    copilot, err := providers.NewCopilot(providers.CopilotConfig{
+        Auth:                s.CopilotAuth,    // *copilot.Client with AllowProxy on
+        EditorPluginVersion: "my-product/1.0", // names the product; required
+        UserAgent:           "MyProductChat/1.0",
+    })
+    if err != nil {
+        return nil, err
+    }
+    return translation.Adapter{Provider: copilot}, nil
+},
+```
+
+- **Credential.** A request's credential token is the caller's GitHub
+  OAuth token. `Auth` exchanges it for a session, which is kept in memory
+  per credential until it nears expiry, and concurrent requests share one
+  exchange. A request without a credential uses the product's own token
+  through `Auth`, configured, cached or from the gh CLI; `Auth` caches that
+  session on disk when it has a `CacheDir`. A credential without a token is
+  a configuration error, and nothing is sent.
+- **Requests** are shaped byte for byte as the gateway shapes them: the
+  Chat fields its facade forwards (`temperature`, `top_p`, `max_tokens`,
+  `max_completion_tokens`, `stop`, `tools`, `tool_choice`, `metadata` and
+  `reasoning_effort`), sent to the API base the session names with the
+  gateway's editor headers. Other fields are dropped and reported as losses.
+- **Surfaces.** Chat Completions is native for every model and streams.
+  Responses is native for a model whose catalog row lists it, so list the
+  models first. Chat for a row that lists only Responses is served over
+  Responses, and a model that lists reasoning efforts takes `max_tokens` as
+  `max_completion_tokens`, unless `DisableAdaptation` or a request's
+  `force_api_support` says otherwise. The Adapter serves Messages, and
+  Responses for the other models, over Chat.
+- **Catalog.** `ListModels` returns every row with the capabilities the
+  gateway derives: surfaces from `supported_endpoints`, and vision, tools,
+  structured output, streaming, reasoning and limits from `capabilities`.
+  What a row omits stays unknown.
+- **401.** A session Copilot rejects is replaced once and the request
+  replayed. A second 401, or GitHub rejecting the OAuth token, fails with
+  status 401, which the Runtime refreshes or reports.
+- **Errors** are `*core.ProviderError`. The auth client's error stays the
+  cause, so `errors.Is(err, copilot.ErrOAuthTokenRejected)` lets a product
+  add guidance that names its own sign-in.
+
 ## Execution
 
 `execution` holds the primitives failover is built from. Endpoints, policy

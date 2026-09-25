@@ -1,0 +1,30 @@
+{
+  "data": [
+    {
+      "id": "codex-fixture-data",
+      "object": "model",
+      "owned_by": "example-vendor",
+      "description": "Synthetic data row without endpoints",
+      "supported_in_api": true,
+      "visibility": "list"
+    },
+    {
+      "id": "codex-fixture-explicit",
+      "supported_in_api": true,
+      "visibility": "list",
+      "supported_endpoints": ["/v1/responses"]
+    },
+    {
+      "id": "codex-fixture-null-endpoints",
+      "supported_in_api": true,
+      "visibility": "list",
+      "supported_endpoints": null
+    },
+    {
+      "id": "codex-fixture-empty-endpoints",
+      "supported_in_api": true,
+      "visibility": "list",
+      "supported_endpoints": []
+    }
+  ]
+}

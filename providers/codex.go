@@ -35,15 +35,24 @@ var codexErrorIdentifier = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 // CodexSession is the storage-neutral authenticated state needed by the
 // official Codex transport. The source remains responsible for refresh and
 // persistence; the transport asks it for current state on every operation.
+//
+// Deprecated: CodexSession serves only CodexProvider. Codex reads the token
+// and account from each request's core.Credential instead.
 type CodexSession struct {
 	Token     *auth.Token
 	AccountID string
 }
 
+// CodexSessionSource supplies the session CodexProvider authenticates with.
+//
+// Deprecated: it serves only CodexProvider. Use Codex.
 type CodexSessionSource interface {
 	Session(context.Context) (CodexSession, error)
 }
 
+// CodexSessionSourceFunc adapts a function to CodexSessionSource.
+//
+// Deprecated: it serves only CodexProvider. Use Codex.
 type CodexSessionSourceFunc func(context.Context) (CodexSession, error)
 
 func (f CodexSessionSourceFunc) Session(ctx context.Context) (CodexSession, error) {
@@ -52,6 +61,9 @@ func (f CodexSessionSourceFunc) Session(ctx context.Context) (CodexSession, erro
 
 // NewCodexTokenSessionSource adapts llm-provider-auth's TokenSource for callers
 // whose optional ChatGPT account identity is fixed outside token storage.
+//
+// Deprecated: it serves only CodexProvider. Use Codex, and keep the token in
+// a core.CredentialStore that the Runtime refreshes with NewCodexRefresh.
 func NewCodexTokenSessionSource(source auth.TokenSource, accountID string) CodexSessionSource {
 	return CodexSessionSourceFunc(func(ctx context.Context) (CodexSession, error) {
 		if source == nil {
@@ -62,6 +74,9 @@ func NewCodexTokenSessionSource(source auth.TokenSource, accountID string) Codex
 	})
 }
 
+// CodexProviderConfig configures CodexProvider.
+//
+// Deprecated: Use CodexConfig and NewCodex.
 type CodexProviderConfig struct {
 	SessionSource CodexSessionSource
 	Instructions  string
@@ -78,8 +93,38 @@ type CodexProviderConfig struct {
 }
 
 // CodexProvider is the authenticated official Codex Responses transport.
+//
+// Deprecated: Use Codex, which implements core.Provider. It takes the
+// credential from each request, so a Runtime can refresh it and replay a
+// rejected request, and it lists only the models an account can use.
+// CodexProvider shares its transport, so both send identical requests.
 type CodexProvider struct {
-	sessions      CodexSessionSource
+	sessions  CodexSessionSource
+	transport codexTransport
+}
+
+// NewCodexProvider returns a CodexProvider.
+//
+// Deprecated: Use NewCodex.
+func NewCodexProvider(config CodexProviderConfig) (*CodexProvider, error) {
+	if config.SessionSource == nil {
+		return nil, fmt.Errorf("Codex session source is required")
+	}
+	transport, err := newCodexTransport(CodexConfig{
+		Instructions: config.Instructions, ClientVersion: config.ClientVersion,
+		ResponsesURL: config.ResponsesURL, ModelsURL: config.ModelsURL,
+		Client: config.Client, Now: config.Now,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &CodexProvider{sessions: config.SessionSource, transport: transport}, nil
+}
+
+// codexTransport is the Codex wire protocol: request shaping, headers, the
+// streamed response and the catalog. Every Codex provider API uses it, so
+// none of them can drift from another.
+type codexTransport struct {
 	instructions  string
 	responsesURL  string
 	modelsURL     string
@@ -88,15 +133,13 @@ type CodexProvider struct {
 	now           func() time.Time
 }
 
-func NewCodexProvider(config CodexProviderConfig) (*CodexProvider, error) {
-	if config.SessionSource == nil {
-		return nil, fmt.Errorf("Codex session source is required")
-	}
+// newCodexTransport validates config and applies its defaults.
+func newCodexTransport(config CodexConfig) (codexTransport, error) {
 	if strings.TrimSpace(config.Instructions) == "" {
-		return nil, fmt.Errorf("Codex instructions are required")
+		return codexTransport{}, fmt.Errorf("Codex instructions are required")
 	}
 	if strings.TrimSpace(config.ClientVersion) == "" {
-		return nil, fmt.Errorf("Codex client version is required")
+		return codexTransport{}, fmt.Errorf("Codex client version is required")
 	}
 	responsesURL := strings.TrimRight(config.ResponsesURL, "/")
 	if responsesURL == "" {
@@ -114,19 +157,42 @@ func NewCodexProvider(config CodexProviderConfig) (*CodexProvider, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &CodexProvider{
-		sessions: config.SessionSource, instructions: config.Instructions,
-		responsesURL: responsesURL, modelsURL: modelsURL,
+	return codexTransport{
+		instructions: config.Instructions, responsesURL: responsesURL, modelsURL: modelsURL,
 		clientVersion: config.ClientVersion, client: client, now: now,
 	}, nil
 }
 
+// codexAuthorization is the identity one Codex request acts for.
+type codexAuthorization struct {
+	scheme    string
+	token     string
+	accountID string
+}
+
+// codexAuthorizer supplies the authorization when a request is built, so a
+// session source is consulted on every operation.
+type codexAuthorizer func(context.Context) (codexAuthorization, error)
+
+// apply sets the headers that authenticate a request. beta adds the
+// Responses beta header, which only a Responses request needs.
+func (a codexAuthorization) apply(header http.Header, beta bool) {
+	header.Set("Authorization", a.scheme+" "+a.token)
+	if beta {
+		header.Set("OpenAI-Beta", "responses=experimental")
+	}
+	header.Set("originator", "codex_cli_rs")
+	if a.accountID != "" {
+		header.Set("Chatgpt-Account-Id", a.accountID)
+	}
+}
+
 func (p *CodexProvider) Complete(ctx context.Context, model string, payload map[string]any, _ *core.Credential) (map[string]any, error) {
-	request, err := p.responsesRequest(model, payload)
+	request, _, err := p.transport.chatRequest(model, payload)
 	if err != nil {
 		return nil, err
 	}
-	response, err := p.doResponses(ctx, request)
+	response, err := p.transport.post(ctx, request, p.session)
 	if err != nil {
 		return nil, err
 	}
@@ -145,11 +211,11 @@ func (p *CodexProvider) Complete(ctx context.Context, model string, payload map[
 // CompleteResponses executes a native Responses request. Codex always streams
 // upstream, so this method buffers only until the terminal response event.
 func (p *CodexProvider) CompleteResponses(ctx context.Context, model string, payload map[string]any, _ *core.Credential) (map[string]any, error) {
-	request, err := p.nativeResponsesRequest(model, payload)
+	request, err := p.transport.nativeRequest(model, payload)
 	if err != nil {
 		return nil, err
 	}
-	response, err := p.doResponses(ctx, request)
+	response, err := p.transport.post(ctx, request, p.session)
 	if err != nil {
 		return nil, err
 	}
@@ -162,11 +228,11 @@ func (p *CodexProvider) CompleteResponses(ctx context.Context, model string, pay
 }
 
 func (p *CodexProvider) Stream(ctx context.Context, model string, payload map[string]any, _ *core.Credential) (StreamIter, error) {
-	request, err := p.responsesRequest(model, payload)
+	request, _, err := p.transport.chatRequest(model, payload)
 	if err != nil {
 		return nil, err
 	}
-	response, err := p.doResponses(ctx, request)
+	response, err := p.transport.post(ctx, request, p.session)
 	if err != nil {
 		return nil, err
 	}
@@ -176,33 +242,43 @@ func (p *CodexProvider) Stream(ctx context.Context, model string, payload map[st
 // StreamResponses executes a native Responses request and returns its SSE
 // events without translating them through Chat Completions.
 func (p *CodexProvider) StreamResponses(ctx context.Context, model string, payload map[string]any, _ *core.Credential) (StreamIter, error) {
-	request, err := p.nativeResponsesRequest(model, payload)
+	request, err := p.transport.nativeRequest(model, payload)
 	if err != nil {
 		return nil, err
 	}
-	response, err := p.doResponses(ctx, request)
+	response, err := p.transport.post(ctx, request, p.session)
 	if err != nil {
 		return nil, err
 	}
 	return newCodexResponsesStreamIter(response.Body), nil
 }
 
+// ListModels returns every catalog row, eligible or not. It sends the
+// Responses beta header to the catalog, as it always has.
 func (p *CodexProvider) ListModels(ctx context.Context, _ *core.Credential) ([]core.ModelInfo, error) {
-	endpoint, err := url.Parse(p.modelsURL)
+	return p.transport.catalog(ctx, p.session, true, parseCodexCatalog)
+}
+
+// catalog fetches and parses the catalog. parse receives the body and the
+// discovery time.
+func (t codexTransport) catalog(ctx context.Context, authorize codexAuthorizer, beta bool, parse func([]byte, time.Time) ([]core.ModelInfo, error)) ([]core.ModelInfo, error) {
+	endpoint, err := url.Parse(t.modelsURL)
 	if err != nil {
 		return nil, &CatalogError{Code: "invalid_endpoint", Detail: "Codex catalog endpoint is invalid", Cause: err}
 	}
 	query := endpoint.Query()
-	query.Set("client_version", p.clientVersion)
+	query.Set("client_version", t.clientVersion)
 	endpoint.RawQuery = query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return nil, &CatalogError{Code: "request_creation_failed", Detail: "Codex catalog request could not be created", Cause: err}
 	}
-	if err := p.authorize(ctx, req); err != nil {
+	authorization, err := authorize(ctx)
+	if err != nil {
 		return nil, &CatalogError{Code: "authentication_failed", Detail: "Codex catalog authentication failed", Cause: err}
 	}
-	resp, err := p.client.Do(req)
+	authorization.apply(req.Header, beta)
+	resp, err := t.client.Do(req)
 	if err != nil {
 		return nil, &CatalogError{Code: "transport_error", Detail: "Codex catalog transport failed", Cause: err}
 	}
@@ -214,24 +290,27 @@ func (p *CodexProvider) ListModels(ctx context.Context, _ *core.Credential) ([]c
 	if err != nil {
 		return nil, &CatalogError{Code: "invalid_response", Detail: "Codex catalog response is invalid", Status: resp.StatusCode, Cause: err}
 	}
-	models, err := parseCodexCatalog(raw, p.now().UTC())
+	models, err := parse(raw, t.now().UTC())
 	if err != nil {
 		return nil, &CatalogError{Code: "invalid_response", Detail: "Codex catalog response is invalid", Status: resp.StatusCode, Cause: err}
 	}
 	return models, nil
 }
 
-func (p *CodexProvider) responsesRequest(model string, payload map[string]any) (map[string]any, error) {
+// chatRequest shapes a Chat Completions payload into a Codex Responses
+// request, and returns the conversion's losses with Gemini thought
+// signatures exempted.
+func (t codexTransport) chatRequest(model string, payload map[string]any) (map[string]any, []translate.Loss, error) {
 	if model == "" || strings.TrimSpace(model) != model {
-		return nil, &InvocationError{Msg: "Codex model ID is required"}
+		return nil, nil, &InvocationError{Msg: "Codex model ID is required", class: core.ProviderErrorInvalidRequest}
 	}
 	rawMessages, ok := payload["messages"]
 	if !ok {
-		return nil, &InvocationError{Msg: "Codex messages are required"}
+		return nil, nil, &InvocationError{Msg: "Codex messages are required", class: core.ProviderErrorInvalidRequest}
 	}
 	messages, err := codexMessages(rawMessages)
 	if err != nil {
-		return nil, &InvocationError{Msg: "Codex messages are invalid", Cause: err}
+		return nil, nil, &InvocationError{Msg: "Codex messages are invalid", Cause: err, class: core.ProviderErrorInvalidRequest}
 	}
 	options := make(map[string]any, len(payload))
 	for key, value := range payload {
@@ -241,22 +320,23 @@ func (p *CodexProvider) responsesRequest(model string, payload map[string]any) (
 			options[key] = value
 		default:
 			if value != nil {
-				return nil, &InvocationError{Msg: "Codex request contains unsupported field " + key}
+				return nil, nil, &InvocationError{Msg: "Codex request contains unsupported field " + key, class: core.ProviderErrorUnsupported}
 			}
 		}
 	}
 	converted := translate.ChatToResponsesWithReport(model, messages, options, true)
-	if err := translate.RejectMaterialLoss(withoutThoughtSignatures(converted.Report)); err != nil {
-		return nil, &InvocationError{Msg: "Codex request contains unsupported fields", Cause: err}
+	losses := exemptThoughtSignatures(converted.Report.Losses)
+	if err := translate.RejectMaterialLoss(translate.Report{Losses: losses}); err != nil {
+		return nil, nil, &InvocationError{Msg: "Codex request contains unsupported fields", Cause: err, class: core.ProviderErrorUnsupported}
 	}
 	request := converted.Value
 	if err := validateCodexTools(request["tools"]); err != nil {
-		return nil, &InvocationError{Msg: "Codex request contains unsupported tools", Cause: err}
+		return nil, nil, &InvocationError{Msg: "Codex request contains unsupported tools", Cause: err, class: core.ProviderErrorUnsupported}
 	}
 	if existing, _ := request["instructions"].(string); existing != "" {
-		request["instructions"] = p.instructions + "\n\n" + existing
+		request["instructions"] = t.instructions + "\n\n" + existing
 	} else {
-		request["instructions"] = p.instructions
+		request["instructions"] = t.instructions
 	}
 	request["model"] = model
 	request["stream"] = true
@@ -264,21 +344,24 @@ func (p *CodexProvider) responsesRequest(model string, payload map[string]any) (
 	if cacheKey, _ := payload["prompt_cache_key"].(string); cacheKey != "" {
 		request["prompt_cache_key"] = cacheKey
 	}
-	return request, nil
+	return request, losses, nil
 }
 
-func (p *CodexProvider) nativeResponsesRequest(model string, payload map[string]any) (map[string]any, error) {
+// nativeRequest shapes a Responses payload into a Codex Responses request.
+// A malformed payload is an invalid request; a valid one Codex cannot serve
+// is unsupported, because another Responses target may serve it.
+func (t codexTransport) nativeRequest(model string, payload map[string]any) (map[string]any, error) {
 	if model == "" || strings.TrimSpace(model) != model {
-		return nil, &InvocationError{Msg: "Codex model ID is required"}
+		return nil, &InvocationError{Msg: "Codex model ID is required", class: core.ProviderErrorInvalidRequest}
 	}
 	if payload == nil || payload["input"] == nil {
-		return nil, &InvocationError{Msg: "Codex Responses input is required"}
+		return nil, &InvocationError{Msg: "Codex Responses input is required", class: core.ProviderErrorInvalidRequest}
 	}
 	if store, ok := payload["store"].(bool); ok && store {
-		return nil, &InvocationError{Msg: "Codex Responses does not support store=true"}
+		return nil, &InvocationError{Msg: "Codex Responses does not support store=true", class: core.ProviderErrorUnsupported}
 	}
 	if background, ok := payload["background"].(bool); ok && background {
-		return nil, &InvocationError{Msg: "Codex Responses does not support background=true"}
+		return nil, &InvocationError{Msg: "Codex Responses does not support background=true", class: core.ProviderErrorUnsupported}
 	}
 	request := make(map[string]any, len(payload)+3)
 	allowed := map[string]bool{
@@ -289,7 +372,7 @@ func (p *CodexProvider) nativeResponsesRequest(model string, payload map[string]
 	}
 	for key, value := range payload {
 		if value != nil && !allowed[key] {
-			return nil, &InvocationError{Msg: "Codex Responses request contains unsupported field " + key}
+			return nil, &InvocationError{Msg: "Codex Responses request contains unsupported field " + key, class: core.ProviderErrorUnsupported}
 		}
 	}
 	for _, key := range []string{
@@ -301,20 +384,20 @@ func (p *CodexProvider) nativeResponsesRequest(model string, payload map[string]
 		}
 	}
 	if err := validateCodexTools(request["tools"]); err != nil {
-		return nil, &InvocationError{Msg: "Codex Responses request contains unsupported tools", Cause: err}
+		return nil, &InvocationError{Msg: "Codex Responses request contains unsupported tools", Cause: err, class: core.ProviderErrorUnsupported}
 	}
 	if instructions, exists := request["instructions"]; exists && instructions != nil {
 		text, ok := instructions.(string)
 		if !ok {
-			return nil, &InvocationError{Msg: "Codex Responses instructions must be a string"}
+			return nil, &InvocationError{Msg: "Codex Responses instructions must be a string", class: core.ProviderErrorInvalidRequest}
 		}
 		if text != "" {
-			request["instructions"] = p.instructions + "\n\n" + text
+			request["instructions"] = t.instructions + "\n\n" + text
 		} else {
-			request["instructions"] = p.instructions
+			request["instructions"] = t.instructions
 		}
 	} else {
-		request["instructions"] = p.instructions
+		request["instructions"] = t.instructions
 	}
 	request["model"] = model
 	request["stream"] = true
@@ -322,19 +405,21 @@ func (p *CodexProvider) nativeResponsesRequest(model string, payload map[string]
 	return request, nil
 }
 
-// withoutThoughtSignatures removes dropped Gemini thought signatures from a
-// request's loss report. llm-translate counts them as material because
-// Gemini needs a signature back on its next turn, but that turn is built
-// from the caller's history, which keeps it, and Codex has no use for one.
-// Codex served such histories before the loss was reported and still does.
-func withoutThoughtSignatures(report translate.Report) translate.Report {
-	losses := make([]translate.Loss, 0, len(report.Losses))
-	for _, loss := range report.Losses {
-		if loss.Class != translate.LossDropped || !strings.HasSuffix(loss.Path, ".thought_signature") {
-			losses = append(losses, loss)
+// exemptThoughtSignatures reports dropped Gemini thought signatures as
+// advisory. llm-translate counts them as material because Gemini needs a
+// signature back on its next turn, but that turn is built from the caller's
+// history, which keeps it, and Codex has no use for one. Codex served such
+// histories before the loss was reported and still does; the drop is still
+// reported.
+func exemptThoughtSignatures(losses []translate.Loss) []translate.Loss {
+	exempted := make([]translate.Loss, len(losses))
+	for i, loss := range losses {
+		if loss.Class == translate.LossDropped && strings.HasSuffix(loss.Path, ".thought_signature") {
+			loss.Severity = translate.LossAdvisory
 		}
+		exempted[i] = loss
 	}
-	return translate.Report{Losses: losses}
+	return exempted
 }
 
 func codexMessages(value any) ([]map[string]any, error) {
@@ -377,27 +462,31 @@ func validateCodexTools(value any) error {
 	return nil
 }
 
-func (p *CodexProvider) doResponses(ctx context.Context, payload map[string]any) (*http.Response, error) {
+// post sends a shaped request and returns the open event stream.
+func (t codexTransport) post(ctx context.Context, payload map[string]any, authorize codexAuthorizer) (*http.Response, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, &InvocationError{Msg: "Codex request encoding failed", Cause: err}
+		return nil, &InvocationError{Msg: "Codex request encoding failed", Cause: err, class: core.ProviderErrorInvalidRequest}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.responsesURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.responsesURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, &InvocationError{Msg: "Codex request could not be created", Cause: err}
+		return nil, &InvocationError{Msg: "Codex request could not be created", Cause: err, class: core.ProviderErrorConfiguration}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	setCodexSDKHeaders(req.Header)
-	if err := p.authorize(ctx, req); err != nil {
+	authorization, err := authorize(ctx)
+	if err != nil {
 		return nil, &InvocationError{Msg: "Codex authentication failed", Cause: err}
 	}
-	resp, err := p.client.Do(req)
+	authorization.apply(req.Header, true)
+	resp, err := t.client.Do(req)
 	if err != nil {
 		upstreamFailure := ctx.Err() == nil
 		return nil, &InvocationError{
 			Msg: "Codex transport failed", Retryable: upstreamFailure,
 			FailoverEligible: upstreamFailure, CircuitFailure: upstreamFailure, Cause: err,
+			class: core.ProviderErrorTransport,
 		}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -412,25 +501,20 @@ func (p *CodexProvider) doResponses(ctx context.Context, payload map[string]any)
 	return resp, nil
 }
 
-func (p *CodexProvider) authorize(ctx context.Context, req *http.Request) error {
+// session reads the current session and authorizes with it.
+func (p *CodexProvider) session(ctx context.Context) (codexAuthorization, error) {
 	session, err := p.sessions.Session(ctx)
 	if err != nil {
-		return err
+		return codexAuthorization{}, err
 	}
 	if session.Token == nil || !session.Token.Valid() {
-		return errors.New("Codex session has no valid access token")
+		return codexAuthorization{}, errors.New("Codex session has no valid access token")
 	}
-	tokenType := strings.TrimSpace(session.Token.TokenType)
-	if tokenType == "" {
-		tokenType = "Bearer"
+	scheme := strings.TrimSpace(session.Token.TokenType)
+	if scheme == "" {
+		scheme = "Bearer"
 	}
-	req.Header.Set("Authorization", tokenType+" "+session.Token.AccessToken)
-	req.Header.Set("OpenAI-Beta", "responses=experimental")
-	req.Header.Set("originator", "codex_cli_rs")
-	if session.AccountID != "" {
-		req.Header.Set("Chatgpt-Account-Id", session.AccountID)
-	}
-	return nil
+	return codexAuthorization{scheme: scheme, token: session.Token.AccessToken, accountID: session.AccountID}, nil
 }
 
 func setCodexSDKHeaders(header http.Header) {
@@ -952,7 +1036,7 @@ func anySlice(value any) []any {
 }
 
 func invocationDecodeError(err error) error {
-	return &InvocationError{Msg: "Codex streaming response is invalid", CircuitFailure: true, Cause: err}
+	return &InvocationError{Msg: "Codex streaming response is invalid", CircuitFailure: true, Cause: err, class: core.ProviderErrorUpstream}
 }
 
 func invocationHTTPError(response *http.Response) error {

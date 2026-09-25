@@ -14,6 +14,29 @@ import (
 // rather than an OAuth access token.
 const TokenTypeAPIKey = "api_key"
 
+// Metadata keys under which a record carries what its OAuth grant needs
+// later, the way the gateway's credential store keeps them. A refresh reads
+// them so each credential refreshes with the client it was granted to, not
+// whichever client is configured now.
+const (
+	// CredentialMetadataOAuthProfile names how the owner signed in, such as
+	// a device or a browser login. The provider defines the values.
+	CredentialMetadataOAuthProfile = "oauth_profile"
+	// CredentialMetadataOAuthClientID is the OAuth client the grant belongs to.
+	CredentialMetadataOAuthClientID = "oauth_client_id"
+	// CredentialMetadataOAuthClientMode is how that client authenticates,
+	// such as public or confidential.
+	CredentialMetadataOAuthClientMode = "oauth_client_mode"
+	// CredentialMetadataOAuthRedirectURI is the redirect URI of a browser
+	// login.
+	CredentialMetadataOAuthRedirectURI = "oauth_redirect_uri"
+	// CredentialMetadataOAuthClientSecret is a confidential client's secret.
+	CredentialMetadataOAuthClientSecret = "oauth_client_secret"
+	// CredentialMetadataAccountLabel is a label for the account, such as an
+	// email address, for display.
+	CredentialMetadataAccountLabel = "account_label"
+)
+
 // ErrNoCredential reports that no credential resolves for a caller and a
 // provider instance.
 var ErrNoCredential = errors.New("core: no credential resolves for this caller and instance")

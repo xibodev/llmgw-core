@@ -1,0 +1,32 @@
+# Messages stream translated to a Chat-only model
+request: POST /v1/messages
+status: 200
+header Cache-Control: no-cache
+header Connection: keep-alive
+header Content-Type: text/event-stream
+upstream: POST /f/chat/completions
+upstream body: {"max_tokens":64,"messages":[{"content":"Say hello","role":"user"}],"model":"chat-model","stream":true}
+body:
+event: message_start
+data: {"message":{"content":[],"id":"<generated msg_>","model":"chat-model","role":"assistant","stop_reason":null,"stop_sequence":null,"type":"message","usage":{"input_tokens":0,"output_tokens":0}},"type":"message_start"}
+
+event: ping
+data: {"type":"ping"}
+
+event: content_block_start
+data: {"content_block":{"text":"","type":"text"},"index":0,"type":"content_block_start"}
+
+event: content_block_delta
+data: {"delta":{"text":"Hello","type":"text_delta"},"index":0,"type":"content_block_delta"}
+
+event: content_block_delta
+data: {"delta":{"text":" from chat","type":"text_delta"},"index":0,"type":"content_block_delta"}
+
+event: content_block_stop
+data: {"index":0,"type":"content_block_stop"}
+
+event: message_delta
+data: {"delta":{"stop_reason":"end_turn","stop_sequence":null},"type":"message_delta","usage":{"output_tokens":4}}
+
+event: message_stop
+data: {"type":"message_stop"}

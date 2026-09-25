@@ -1,0 +1,35 @@
+# Chat Completions, native OpenAI-compatible
+request: POST /v1/chat/completions
+status: 200
+header Content-Type: application/json
+header X-Llmgw-Attempts: 1
+header X-Llmgw-Duration-Ms: <ms>
+header X-Llmgw-Fallback-Ms: <ms>
+header X-Llmgw-Prompt-Bytes: 39
+header X-Llmgw-Tool-Schema-Bytes: 0
+header X-Llmgw-Transport-Mode: native
+header X-Llmgw-Ttfb-Ms: <ms>
+upstream: POST /f/chat/completions
+upstream body: {"messages":[{"content":"Say hello","role":"user"}],"model":"chat-model","stream":false}
+body:
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "Hello from chat",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": "<time>",
+  "id": "chatcmpl_fixture",
+  "model": "chat-model",
+  "object": "chat.completion",
+  "usage": {
+    "completion_tokens": 4,
+    "prompt_tokens": 3,
+    "total_tokens": 7
+  }
+}

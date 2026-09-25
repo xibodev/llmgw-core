@@ -1,0 +1,36 @@
+# Responses, native OpenAI-compatible
+request: POST /v1/responses
+status: 200
+header Content-Type: application/json
+header X-Llmgw-Transport-Mode: native
+upstream: POST /f/responses
+upstream body: {"input":"Say hello","model":"responses-model","stream":false}
+body:
+{
+  "created_at": "<time>",
+  "id": "resp_fixture",
+  "instructions": null,
+  "model": "responses-model",
+  "object": "response",
+  "output": [
+    {
+      "content": [
+        {
+          "annotations": [],
+          "text": "Hello from responses",
+          "type": "output_text"
+        }
+      ],
+      "id": "msg_fixture",
+      "role": "assistant",
+      "status": "completed",
+      "type": "message"
+    }
+  ],
+  "status": "completed",
+  "usage": {
+    "input_tokens": 3,
+    "output_tokens": 4,
+    "total_tokens": 7
+  }
+}

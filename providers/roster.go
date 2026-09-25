@@ -10,6 +10,9 @@ import (
 )
 
 // AutoConnectResult represents the outcome of self-adjudicating an anonymous provider.
+//
+// Deprecated: use anonymous.Result, the outcome of an anonymous.Orchestrator
+// check.
 type AutoConnectResult struct {
 	RegistryID string   `json:"registry_id"`
 	ProviderID string   `json:"provider_id"`
@@ -22,6 +25,14 @@ type AutoConnectResult struct {
 
 // AutoConnectAnonymousProviders discovers models for all reviewed anonymous providers,
 // self-adjudicates each with a minimal completion probe, and returns the live results.
+//
+// Deprecated: use an anonymous.Orchestrator. This probes one model per
+// provider through the legacy OpenAIProvider with its own HTTP client, so
+// it sends none of the verticals' requests, such as Zen's anonymous
+// identity or Pollinations' path, and loses a probe's status. The
+// orchestrator reads catalogs and probes every model through the
+// product's Catalog and Invoker, and keeps enrollment, claims and
+// evidence in product hooks.
 func AutoConnectAnonymousProviders(ctx context.Context, httpClient *http.Client) []AutoConnectResult {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 30 * time.Second}

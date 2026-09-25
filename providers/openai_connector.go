@@ -15,6 +15,13 @@ import (
 
 // NewAnonymousOpenAICompatibleAdapter adapts a reviewed, keyless
 // OpenAI-compatible endpoint to the shared provider connector.
+//
+// Deprecated: use an anonymous.Orchestrator, whose adapter reads the
+// catalog and sends probes through the product's Catalog and Invoker, so
+// each provider's vertical admits its models and shapes its requests. This
+// adapter reads every catalog row unadmitted and posts to
+// /chat/completions with its own client, which Pollinations and Zen do
+// not serve as the gateway does.
 func NewAnonymousOpenAICompatibleAdapter(baseURL string, client *http.Client) core.ProviderAdapter {
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}

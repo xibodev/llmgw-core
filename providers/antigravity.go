@@ -16,7 +16,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -122,99 +121,7 @@ func (p *ExperimentalAntigravityProvider) listModels(ctx context.Context) ([]cor
 	}, "antigravity model discovery", &response, false); err != nil {
 		return nil, token, err
 	}
-
-	ids := make([]string, 0, len(response.Models))
-	for id := range response.Models {
-		if strings.TrimSpace(id) != "" {
-			ids = append(ids, id)
-		}
-	}
-	sort.Strings(ids)
-	models := make([]core.ModelInfo, 0, len(ids))
-	for _, id := range ids {
-		metadata := response.Models[id]
-		imageGeneration := rosterSupport(response.ImageGenerationModelIDs, id)
-		supportedAPIs := []string{"/v1/chat/completions"}
-		if imageGeneration == core.SupportSupported {
-			supportedAPIs = append(supportedAPIs, "/v1/images/generations")
-		}
-		models = append(models, core.ModelInfo{
-			ID:            id,
-			Object:        "model",
-			OwnedBy:       "google-antigravity",
-			Description:   metadata.DisplayName,
-			SupportedAPIs: supportedAPIs,
-			Capabilities:  antigravityModelCapabilities(metadata, imageGeneration, rosterSupport(response.AudioTranscriptionModelIDs, id)),
-		})
-	}
-	return models, token, nil
-}
-
-type antigravityCatalogResponse struct {
-	Models                     map[string]antigravityCatalogModel `json:"models"`
-	AudioTranscriptionModelIDs *[]string                          `json:"audioTranscriptionModelIds"`
-	ImageGenerationModelIDs    *[]string                          `json:"imageGenerationModelIds"`
-	TabModelIDs                []string                           `json:"tabModelIds"`
-	TieredModelIDs             struct {
-		Flash     []string `json:"flash"`
-		FlashLite []string `json:"flashLite"`
-		Pro       []string `json:"pro"`
-	} `json:"tieredModelIds"`
-}
-
-type antigravityCatalogModel struct {
-	DisplayName string `json:"displayName"`
-	// MIME types and video support are retained as bounded upstream observations,
-	// but are not routing facts in the version 1 capability schema.
-	SupportedMimeTypes map[string]bool `json:"supportedMimeTypes"`
-	SupportsImages     *bool           `json:"supportsImages"`
-	SupportsThinking   *bool           `json:"supportsThinking"`
-	SupportsVideo      *bool           `json:"supportsVideo"`
-}
-
-func antigravityModelCapabilities(metadata antigravityCatalogModel, imageGeneration, audioTranscription core.Support) *core.ModelCapabilities {
-	capabilities := &core.ModelCapabilities{
-		SchemaVersion: core.ModelCapabilitiesSchemaVersion,
-		Operations: core.ModelOperationCapabilities{
-			Chat: core.SupportSupported,
-		},
-		Surfaces: core.ModelSurfaceCapabilities{
-			ChatCompletions: core.SupportSupported,
-		},
-		Inputs: core.ModelInputCapabilities{
-			Text: core.SupportSupported,
-		},
-		Provenance: core.ModelCapabilityProvenance{
-			Source:     core.ModelCapabilitySourceInferred,
-			Confidence: core.ModelCapabilityConfidenceMedium,
-		},
-	}
-	if metadata.SupportsThinking != nil {
-		capabilities.Reasoning = supportFromBool(*metadata.SupportsThinking)
-	}
-	capabilities.Operations.Image = imageGeneration
-	capabilities.Operations.AudioIn = audioTranscription
-	return capabilities
-}
-
-func rosterSupport(roster *[]string, model string) core.Support {
-	if roster == nil {
-		return core.SupportUnknown
-	}
-	if stringSet(*roster)[model] {
-		return core.SupportSupported
-	}
-	return core.SupportUnsupported
-}
-
-func stringSet(values []string) map[string]bool {
-	set := make(map[string]bool, len(values))
-	for _, value := range values {
-		if value = strings.TrimSpace(value); value != "" {
-			set[value] = true
-		}
-	}
-	return set
+	return response.models(), token, nil
 }
 
 // GenerateImages requests Gemini text and image response modalities. The
@@ -288,13 +195,6 @@ func (p *ExperimentalAntigravityProvider) generateImages(ctx context.Context, re
 	}
 	result, err := parseAntigravityImageSSE(&body, request.Count)
 	return result, token, err
-}
-
-func supportFromBool(value bool) core.Support {
-	if value {
-		return core.SupportSupported
-	}
-	return core.SupportUnsupported
 }
 
 func (p *ExperimentalAntigravityProvider) Complete(ctx context.Context, model string, payload map[string]any, _ *core.Credential) (map[string]any, error) {

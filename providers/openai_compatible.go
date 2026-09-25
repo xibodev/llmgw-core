@@ -27,7 +27,10 @@ type OpenAICompatibleConfig struct {
 	BaseURL string
 	// RegistryID is the registry entry the instance serves, as a Registry
 	// names it. It selects the wire facts the gateway keys on an entry:
-	// "openai" serves Responses for every model.
+	// "openai" serves Responses for every model, and kilo_code, llm7,
+	// ovh_ai_endpoints and pollinations list, without a key, only the
+	// models anonymous access admits. Pollinations also takes Chat at
+	// /v1/chat/completions and lists its catalog as a bare array.
 	RegistryID string
 	// Models returns the row a product's catalog holds for a model, as
 	// ListModels returned it. A model whose row lists a Responses endpoint
@@ -64,8 +67,9 @@ type OpenAICompatibleConfig struct {
 
 // OpenAICompatible implements core.Provider for an upstream that speaks the
 // OpenAI wire: the gateway's openai_compatible, openai and litellm
-// instances. It is the gateway's OpenAI transport without its OpenCode Zen
-// and GitHub Copilot branches, which Zen and Copilot own.
+// instances, and the anonymous catalogs the registry curates. It is the
+// gateway's OpenAI transport without its OpenCode Zen and GitHub Copilot
+// branches, which Zen and Copilot own.
 //
 // Chat Completions is native for every model, and Responses for a model
 // whose catalog row lists it or that the openai registry entry serves. A
@@ -73,8 +77,9 @@ type OpenAICompatibleConfig struct {
 // over Chat for the other models.
 //
 // A credential's API key, or else its token, is the bearer, without any
-// "Bearer " prefix. No key, "free" or "none" sends no Authorization. A
-// credential's headers are sent too.
+// "Bearer " prefix. No key, "free" or "none" sends no Authorization, and
+// to an anonymous registry entry it is anonymous access, as "public" is.
+// A credential's headers are sent too.
 //
 // Errors are *core.ProviderError. A refusal is classified by the gateway's
 // status set with the upstream's Retry-After, and its message never quotes

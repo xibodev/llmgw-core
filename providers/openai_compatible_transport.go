@@ -18,7 +18,10 @@ import (
 type openAIAccess struct {
 	// authorization is the Authorization header, empty without a key.
 	authorization string
-	headers       map[string]string
+	// anonymous is keyless access to a registry entry whose catalog lists,
+	// without a key, only the models anonymous access admits.
+	anonymous bool
+	headers   map[string]string
 }
 
 // access reads a credential as the gateway reads an OpenAI-compatible key:
@@ -42,6 +45,8 @@ func (p *OpenAICompatible) access(credential *core.Credential) (openAIAccess, er
 	if key != "" {
 		access.authorization = "Bearer " + key
 	}
+	// The gateway sends "public" as a key, yet counts it as anonymous.
+	access.anonymous = openAIAnonymousEntry(p.registryID) && (key == "" || strings.EqualFold(key, "public"))
 	return access, nil
 }
 

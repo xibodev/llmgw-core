@@ -13,8 +13,10 @@ import (
 // ListModels returns the catalog the credential can use, read as the
 // gateway reads an OpenAI-compatible catalog: every row of /models, with
 // its vendor, display name, endpoints and the capabilities it reports.
-// Each row's typed capabilities are what core.InferCapabilities derives
-// from it, as the gateway derives them when it stores the row.
+// Without a key, an anonymous registry entry lists only the models
+// anonymous access admits; see openAIAnonymousEntry. Each row's typed
+// capabilities are what core.InferCapabilities derives from it, as the
+// gateway derives them when it stores the row.
 func (p *OpenAICompatible) ListModels(ctx context.Context, credential *core.Credential) ([]core.ModelInfo, error) {
 	access, err := p.access(credential)
 	if err != nil {
@@ -37,7 +39,12 @@ func (p *OpenAICompatible) ListModels(ctx context.Context, credential *core.Cred
 		retryAfter := retryAfterDelay(response.Header.Get("Retry-After"), discoveredAt)
 		return nil, catalogFailure(ctx, CatalogCodeHTTPError, fmt.Sprintf("Provider catalog returned HTTP %d.", status), status, retryAfter, nil)
 	}
-	models, err := p.decodeCatalog(ctx, response, discoveredAt)
+	var models []core.ModelInfo
+	if p.registryID == "pollinations" {
+		models, err = decodePollinationsCatalog(ctx, response, access.anonymous)
+	} else {
+		models, err = p.decodeCatalog(ctx, response, discoveredAt, access.anonymous)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +56,7 @@ func (p *OpenAICompatible) ListModels(ctx context.Context, credential *core.Cred
 
 // decodeCatalog reads a data envelope whose every row names its model by
 // id or name, checking every row before any is used.
-func (p *OpenAICompatible) decodeCatalog(ctx context.Context, response *http.Response, now time.Time) ([]core.ModelInfo, error) {
+func (p *OpenAICompatible) decodeCatalog(ctx context.Context, response *http.Response, now time.Time, anonymous bool) ([]core.ModelInfo, error) {
 	body, err := decodeCatalogResponse(ctx, response, now, "data", "id", "name")
 	if err != nil {
 		return nil, err
@@ -59,6 +66,9 @@ func (p *OpenAICompatible) decodeCatalog(ctx context.Context, response *http.Res
 	for _, item := range items {
 		row, _ := item.(map[string]any)
 		models = append(models, openAICatalogModel(row))
+	}
+	if anonymous {
+		models = admitAnonymousRows(p.registryID, models, items)
 	}
 	return models, nil
 }

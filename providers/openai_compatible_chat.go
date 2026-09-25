@@ -144,8 +144,12 @@ func (p *OpenAICompatible) chatOverResponses(model string, messages []any, optio
 	}, nil
 }
 
-// chatPath is where the upstream takes Chat.
+// chatPath is where the upstream takes Chat. Pollinations serves it at
+// /v1/chat/completions under a base without the version.
 func (p *OpenAICompatible) chatPath() string {
+	if p.registryID == "pollinations" {
+		return "/v1/chat/completions"
+	}
 	return "/chat/completions"
 }
 

@@ -1,0 +1,103 @@
+[
+  {
+    "id": "copilot-fixture-bare", "object": "model", "created": 0, "owned_by": "",
+    "capabilities": {
+      "schema_version": 1,
+      "operations": {"chat": "unknown", "embeddings": "unknown", "image": "unknown", "audio_in": "unknown", "audio_out": "unknown", "video": "unknown", "token_count": "unknown"},
+      "surfaces": {"chat_completions": "unknown", "responses": "unknown", "messages": "unknown"},
+      "inputs": {"text": "unknown", "image": "unknown"},
+      "tools": "unknown", "reasoning": "unknown", "structured_output": "unknown", "streaming": "unknown", "stateful_responses": "unknown",
+      "limits": {}, "provenance": {"source": "inferred", "confidence": "medium"},
+      "freshness": {"discovered_at": "2026-09-21T12:00:00Z", "expires_at": "2026-09-21T13:00:00Z"}
+    }
+  },
+  {
+    "id": "copilot-fixture-named", "object": "model", "created": 0, "owned_by": "",
+    "capabilities": {
+      "schema_version": 1,
+      "operations": {"chat": "unknown", "embeddings": "unknown", "image": "unknown", "audio_in": "unknown", "audio_out": "unknown", "video": "unknown", "token_count": "unknown"},
+      "surfaces": {"chat_completions": "unknown", "responses": "unknown", "messages": "unknown"},
+      "inputs": {"text": "unknown", "image": "unknown"},
+      "tools": "unknown", "reasoning": "unknown", "structured_output": "unknown", "streaming": "unknown", "stateful_responses": "unknown",
+      "limits": {}, "provenance": {"source": "inferred", "confidence": "medium"},
+      "freshness": {"discovered_at": "2026-09-21T12:00:00Z", "expires_at": "2026-09-21T13:00:00Z"}
+    }
+  },
+  {
+    "id": "copilot-fixture-blank-id", "object": "model", "created": 0, "owned_by": "fixture-owner",
+    "capabilities": {
+      "schema_version": 1,
+      "operations": {"chat": "unknown", "embeddings": "unknown", "image": "unknown", "audio_in": "unknown", "audio_out": "unknown", "video": "unknown", "token_count": "unknown"},
+      "surfaces": {"chat_completions": "unknown", "responses": "unknown", "messages": "unknown"},
+      "inputs": {"text": "unknown", "image": "unknown"},
+      "tools": "unknown", "reasoning": "unknown", "structured_output": "unknown", "streaming": "unknown", "stateful_responses": "unknown",
+      "limits": {}, "provenance": {"source": "inferred", "confidence": "medium"},
+      "freshness": {"discovered_at": "2026-09-21T12:00:00Z", "expires_at": "2026-09-21T13:00:00Z"}
+    }
+  },
+  {
+    "id": "copilot-fixture-labelled", "object": "model", "created": 0, "owned_by": "", "description": "Fixture Labelled",
+    "capabilities": {
+      "schema_version": 1,
+      "operations": {"chat": "unknown", "embeddings": "unknown", "image": "unknown", "audio_in": "unknown", "audio_out": "unknown", "video": "unknown", "token_count": "unknown"},
+      "surfaces": {"chat_completions": "unknown", "responses": "unknown", "messages": "unknown"},
+      "inputs": {"text": "unknown", "image": "unknown"},
+      "tools": "unknown", "reasoning": "unknown", "structured_output": "unknown", "streaming": "unknown", "stateful_responses": "unknown",
+      "limits": {}, "provenance": {"source": "inferred", "confidence": "medium"},
+      "freshness": {"discovered_at": "2026-09-21T12:00:00Z", "expires_at": "2026-09-21T13:00:00Z"}
+    }
+  },
+  {
+    "id": "copilot-fixture-display", "object": "model", "created": 0, "owned_by": "fixture-owner", "description": "Fixture Display",
+    "capabilities": {
+      "schema_version": 1,
+      "operations": {"chat": "unknown", "embeddings": "unknown", "image": "unknown", "audio_in": "unknown", "audio_out": "unknown", "video": "unknown", "token_count": "unknown"},
+      "surfaces": {"chat_completions": "unknown", "responses": "unknown", "messages": "unknown"},
+      "inputs": {"text": "unknown", "image": "unknown"},
+      "tools": "unknown", "reasoning": "unknown", "structured_output": "unknown", "streaming": "unknown", "stateful_responses": "unknown",
+      "limits": {}, "provenance": {"source": "inferred", "confidence": "medium"},
+      "freshness": {"discovered_at": "2026-09-21T12:00:00Z", "expires_at": "2026-09-21T13:00:00Z"}
+    }
+  },
+  {
+    "id": "copilot-fixture-odd", "object": "model", "created": 0, "owned_by": "",
+    "supported_apis": ["/chat/completions"],
+    "capabilities": {
+      "schema_version": 1,
+      "operations": {"chat": "supported", "embeddings": "unknown", "image": "unknown", "audio_in": "unknown", "audio_out": "unknown", "video": "unknown", "token_count": "unknown"},
+      "surfaces": {"chat_completions": "supported", "responses": "unknown", "messages": "unknown"},
+      "inputs": {"text": "supported", "image": "unknown"},
+      "tools": "unknown", "reasoning": "unknown", "structured_output": "unknown", "streaming": "unknown", "stateful_responses": "unknown",
+      "limits": {}, "provenance": {"source": "inferred", "confidence": "medium"},
+      "freshness": {"discovered_at": "2026-09-21T12:00:00Z", "expires_at": "2026-09-21T13:00:00Z"}
+    }
+  },
+  {
+    "id": "copilot-fixture-empty", "object": "model", "created": 0, "owned_by": "",
+    "capabilities": {
+      "schema_version": 1,
+      "operations": {"chat": "unknown", "embeddings": "unknown", "image": "unknown", "audio_in": "unknown", "audio_out": "unknown", "video": "unknown", "token_count": "unknown"},
+      "surfaces": {"chat_completions": "unknown", "responses": "unknown", "messages": "unknown"},
+      "inputs": {"text": "unknown", "image": "unknown"},
+      "tools": "unknown", "reasoning": "unknown", "structured_output": "unknown", "streaming": "unknown", "stateful_responses": "unknown",
+      "limits": {"context_tokens": 8192}, "provenance": {"source": "inferred", "confidence": "medium"},
+      "freshness": {"discovered_at": "2026-09-21T12:00:00Z", "expires_at": "2026-09-21T13:00:00Z"}
+    }
+  },
+  {
+    "id": "copilot-fixture-operations", "object": "model", "created": 0, "owned_by": "",
+    "supported_apis": [
+      " /V1/Chat/Completions ", "ws:/responses", "/v1/embeddings", "/v1/images/generations",
+      "/v1/audio/transcriptions", "/v1/audio/speech", "/v1/videos/generations", "/v1/messages/count_tokens"
+    ],
+    "capabilities": {
+      "schema_version": 1,
+      "operations": {"chat": "supported", "embeddings": "supported", "image": "supported", "audio_in": "supported", "audio_out": "supported", "video": "supported", "token_count": "supported"},
+      "surfaces": {"chat_completions": "supported", "responses": "supported", "messages": "unknown"},
+      "inputs": {"text": "supported", "image": "unknown"},
+      "tools": "unknown", "reasoning": "unknown", "structured_output": "unknown", "streaming": "unknown", "stateful_responses": "unknown",
+      "limits": {}, "provenance": {"source": "inferred", "confidence": "medium"},
+      "freshness": {"discovered_at": "2026-09-21T12:00:00Z", "expires_at": "2026-09-21T13:00:00Z"}
+    }
+  }
+]

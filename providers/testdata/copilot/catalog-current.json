@@ -1,0 +1,106 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "copilot-fixture-chat",
+      "name": "Fixture Chat",
+      "object": "model",
+      "vendor": "Fixture Vendor",
+      "version": "copilot-fixture-chat-2026-01-01",
+      "preview": false,
+      "model_picker_enabled": true,
+      "model_picker_category": "versatile",
+      "is_chat_default": true,
+      "is_chat_fallback": true,
+      "billing": {"is_premium": false, "multiplier": 0},
+      "policy": {"state": "enabled", "terms": "Synthetic terms."},
+      "capabilities": {
+        "family": "fixture-chat",
+        "object": "model_capabilities",
+        "tokenizer": "o200k_base",
+        "type": "chat",
+        "limits": {
+          "max_context_window_tokens": 128000,
+          "max_output_tokens": 16384,
+          "max_prompt_tokens": 64000,
+          "vision": {"max_prompt_image_size": 3145728, "max_prompt_images": 1, "supported_media_types": ["image/jpeg", "image/png"]}
+        },
+        "supports": {"parallel_tool_calls": true, "streaming": true, "structured_outputs": true, "tool_calls": true, "vision": true}
+      }
+    },
+    {
+      "id": "copilot-fixture-reasoning",
+      "name": "Fixture Reasoning",
+      "object": "model",
+      "vendor": "Fixture Vendor",
+      "version": "copilot-fixture-reasoning",
+      "preview": true,
+      "model_picker_enabled": true,
+      "supported_endpoints": ["/chat/completions", "/responses"],
+      "billing": {"is_premium": true, "multiplier": 1},
+      "capabilities": {
+        "family": "fixture-reasoning",
+        "object": "model_capabilities",
+        "tokenizer": "o200k_base",
+        "type": "chat",
+        "limits": {"max_context_window_tokens": 400000, "max_output_tokens": 128000, "max_prompt_tokens": 272000},
+        "supports": {
+          "reasoning_effort": ["low", "medium", "high"], "parallel_tool_calls": true, "streaming": true,
+          "structured_outputs": true, "tool_calls": true, "vision": false
+        }
+      }
+    },
+    {
+      "id": "copilot-fixture-codex",
+      "name": "Fixture Codex",
+      "object": "model",
+      "vendor": "Fixture Vendor",
+      "version": "copilot-fixture-codex",
+      "model_picker_enabled": true,
+      "supported_endpoints": ["/responses"],
+      "capabilities": {
+        "family": "fixture-codex",
+        "type": "chat",
+        "limits": {"max_context_window_tokens": 400000, "max_output_tokens": 128000},
+        "supports": {"reasoning_effort": ["low", "medium", "high"], "parallel_tool_calls": true, "streaming": true, "tool_calls": true}
+      }
+    },
+    {
+      "id": "copilot-fixture-claude",
+      "name": "Fixture Claude",
+      "object": "model",
+      "vendor": "Fixture Anthropic",
+      "version": "copilot-fixture-claude",
+      "model_picker_enabled": true,
+      "supported_endpoints": ["/chat/completions", "/v1/messages"],
+      "capabilities": {
+        "family": "fixture-claude",
+        "type": "chat",
+        "limits": {"max_output_tokens": 16000, "max_prompt_tokens": 128000},
+        "supports": {
+          "max_thinking_budget": 32000, "min_thinking_budget": 1024, "parallel_tool_calls": true,
+          "streaming": true, "tool_calls": true, "vision": true
+        }
+      }
+    },
+    {
+      "id": "copilot-fixture-embedding",
+      "name": "Fixture Embedding",
+      "object": "model",
+      "vendor": "Fixture Vendor",
+      "version": "copilot-fixture-embedding",
+      "model_picker_enabled": false,
+      "capabilities": {
+        "family": "fixture-embedding",
+        "type": "embeddings",
+        "limits": {"max_inputs": 512},
+        "supports": {"dimensions": true}
+      }
+    },
+    {
+      "id": "copilot-fixture-chat",
+      "name": "Shadowed duplicate",
+      "vendor": "Fixture Vendor"
+    }
+  ]
+}

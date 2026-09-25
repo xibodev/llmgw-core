@@ -342,6 +342,48 @@ rt, err := runtime.New(runtime.Options[Settings]{
 `ExperimentalAntigravityProvider`, which reads tokens from a token source,
 is deprecated. It shares the transport, so both send identical requests.
 
+## OpenCode Zen
+
+`providers.Zen` is the OpenCode Zen vertical: request shaping, anonymous
+access and its invocation identity, both streams, and the catalog and what
+its rows mean. Requests are shaped byte for byte as the gateway shapes them.
+
+```go
+provider, err := providers.NewZen(providers.ZenConfig{
+    // The product's catalog row for a model, as ListModels returned it.
+    // Zen serves the model on the endpoints the row lists.
+    Models: catalog.Lookup,
+})
+if err != nil {
+    return nil, err
+}
+return translation.Adapter{Provider: provider}, nil // Messages over Chat
+```
+
+- **Credential.** Optional. An API key is the bearer. Without one, or with
+  `free`, `none` or `public`, Zen sends the anonymous identity: the public
+  bearer and the OpenCode CLI's request admission. A model the catalog knows
+  anonymous access does not admit is refused before anything is sent. Every
+  request carries the `zen.InvocationIdentity` in its context, or a new one;
+  create one per inbound request so retries reuse it.
+- **Surfaces.** Chat Completions for every model, and Responses for a model
+  whose row lists `/responses`. Chat for a Responses-only model is converted
+  to Responses as the gateway converts it. A model the catalog lacks follows
+  the gateway's cold-catalog contract: Muse models serve Responses only.
+  Chat fields the gateway does not forward are dropped as advisory losses.
+- **Streams.** Native streams pass Zen's records through byte for byte. A
+  Responses stream keeps typed JSON events up to the terminal one and fails
+  if that event never arrives.
+- **Catalog.** Keyed, `ListModels` reads Zen's `/models` as the gateway does.
+  Anonymous, it lists the models `zen.Normalize` admits from `models.dev` and
+  the live catalog, each tagged `providers.ModelTagFree` with its endpoint.
+- **Errors** are `*core.ProviderError` with the upstream status and
+  `Retry-After`; a catalog failure's `*providers.CatalogError` code is the
+  gateway's catalog error code without its `catalog_` prefix.
+
+The `zen.Client` discovery and completion methods are deprecated. They share
+the normalizer, admission and identity code, and behave as before.
+
 ## Execution
 
 `execution` holds the primitives failover is built from. Endpoints, policy

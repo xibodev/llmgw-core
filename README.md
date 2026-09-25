@@ -265,10 +265,12 @@ rt, err := runtime.New(runtime.Options[Settings]{
   listed. A row that omits `supported_endpoints`, as current catalogs do,
   gets `/responses`.
 - **Refresh.** A rejected token fails with status 401, so the Runtime
-  refreshes once and replays. The refreshed record keeps the account, taken
-  from the token response or its ID token, so a refresh that returns another
-  account is refused. A grant the token endpoint rejects for good revokes
-  the credential.
+  refreshes once and replays. Each credential refreshes with the OAuth client
+  its metadata names (`core.CredentialMetadataOAuthClientID`, falling back
+  to the configured client), and a browser login as that public PKCE client.
+  The refreshed record keeps the account, taken from the token response or
+  its ID token, so a refresh that returns another account is refused. A
+  grant the token endpoint rejects for good revokes the credential.
 - **Errors** are `*core.ProviderError`, with the transport's error as the
   cause.
 

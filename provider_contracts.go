@@ -88,10 +88,14 @@ const (
 
 // CatalogEvidence records what a provider advertised. Discovery alone does not
 // prove that any model can successfully perform inference.
+//
+// SchemaVersion stamps the rules that wrote the evidence, so a product that
+// changes what a stored row means can refuse rows older rules wrote.
 type CatalogEvidence struct {
-	Status     CatalogEvidenceStatus `json:"status"`
-	Models     []ModelInfo           `json:"models,omitempty"`
-	ObservedAt time.Time             `json:"observed_at,omitempty"`
+	Status        CatalogEvidenceStatus `json:"status"`
+	Models        []ModelInfo           `json:"models,omitempty"`
+	ObservedAt    time.Time             `json:"observed_at,omitempty"`
+	SchemaVersion int                   `json:"schema_version,omitempty"`
 }
 
 type CompletionProbeStatus string

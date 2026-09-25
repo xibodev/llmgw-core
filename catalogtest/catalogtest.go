@@ -23,7 +23,8 @@ type Opener func(t *testing.T) core.CatalogStore
 type NewBackend func(t *testing.T) Opener
 
 // Run verifies the CatalogStore guarantees against fresh backing storage for
-// every subtest.
+// every subtest, and the ConditionalCatalogStore guarantees too when the
+// store implements them.
 func Run(t *testing.T, newBackend NewBackend) {
 	t.Helper()
 	ctx := context.Background()
@@ -180,6 +181,8 @@ func Run(t *testing.T, newBackend NewBackend) {
 			t.Error(err)
 		}
 	})
+
+	runConditional(t, newBackend)
 }
 
 // evidence returns a catalog whose models all carry tag, so a mix of two saves

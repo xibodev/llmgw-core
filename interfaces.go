@@ -179,6 +179,11 @@ type UsageRecord struct {
 }
 
 // ModelInfo describes an available upstream model or alias.
+//
+// DisplayName, Vendor, Free and LegacyCapabilities carry what the gateway's
+// catalogs record about a row beyond the fields before them. Each is left
+// out of JSON when empty, so a row that sets none of them encodes exactly as
+// it did before they existed.
 type ModelInfo struct {
 	ID            string             `json:"id"`
 	Object        string             `json:"object"`
@@ -190,6 +195,20 @@ type ModelInfo struct {
 	APIVisibility string             `json:"api_visibility,omitempty"`
 	SupportedAPIs []string           `json:"supported_apis,omitempty"`
 	Capabilities  *ModelCapabilities `json:"capabilities,omitempty"`
+	// DisplayName is the name to show for the model, such as a catalog
+	// row's display_name.
+	DisplayName string `json:"display_name,omitempty"`
+	// Vendor is who makes the model, as the upstream catalog names it.
+	Vendor string `json:"vendor,omitempty"`
+	// Free marks a model the upstream serves at no cost, such as a free
+	// model an anonymous catalog admits. Catalogs that predate the field
+	// tag such a row "free" instead.
+	Free bool `json:"free,omitempty"`
+	// LegacyCapabilities is the gateway's untyped capability map, such as
+	// {"chat": true, "vision": true, "context_window": 128000}, kept as the
+	// catalog reported it. InferCapabilities reads it. Copies of a row share
+	// the map, so copy it before changing it.
+	LegacyCapabilities map[string]any `json:"legacy_capabilities,omitempty"`
 }
 
 // GenerateImagesRequest is the storage-neutral input for image synthesis.

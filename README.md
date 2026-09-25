@@ -20,6 +20,21 @@ Headless, embeddable LLM routing engine and resilient multi-provider proxy for G
 go get github.com/xibodev/llmgw-core
 ```
 
+### Dependencies
+
+- **llm-provider-auth v0.6.0.** Its `codex` package no longer supplies a
+  client version, so `providers.NewCodexProvider` requires
+  `CodexProviderConfig.ClientVersion`, the version of the product making the
+  call, and returns an error when it is blank. The provider sends it to the
+  Codex catalog as `client_version`. `ResponsesURL` and `ModelsURL` still
+  default to the canonical Codex endpoints.
+- **llm-translate v0.3.0.** Conversions report the vendor fields inside
+  messages that the target surface cannot carry, and the translation adapter
+  enforces those losses; see [Loss policy](#loss-policy). The Anthropic and
+  Codex providers have no loss report, so they keep serving the histories
+  they served before. The Anthropic provider carries the `cache_control` of
+  Chat text parts into the Messages request, system prompt included.
+
 ## Quick Start (Embedded in 15 Lines)
 
 ```go
@@ -171,9 +186,47 @@ translating through llm-translate:
 - Chat Completions over Responses.
 - Responses over Chat Completions.
 
+### Loss policy
+
 Request losses are checked against the `LossPolicy` before the provider is
-called. All losses, including the provider's own, are returned in
-`Response.Losses` or through the stream's `LossReporter`.
+called, and the response losses of `Invoke` once it answers. A stream's
+response losses are reported but not enforced, because its frames are
+already delivered. All losses, including the provider's own and those the
+policy allows, are returned in `Response.Losses` or through the stream's
+`LossReporter`.
+
+Gemini returns a thought signature with each tool call and needs it back on
+the next turn. No other surface can carry one, so llm-translate reports each
+dropped signature as a material loss at its path, such as
+`messages.1.tool_calls.0.extra_content.google.thought_signature`. The
+default policy rejects unmatched material losses, so the adapter refuses:
+
+- a Chat request whose history carries signatures, served over Responses;
+- a Chat response that carries them, converted for a Messages or Responses
+  client, after the provider has answered.
+
+The refusal is a `*LossPolicyError`, which permits failover to a target that
+serves the surface natively. Under the same policy, a Messages stream over
+Chat Completions still serves signed tool calls and only reports the loss.
+
+A product that serves Gemini through the adapter should consider allowing
+the loss, which is still reported:
+
+```go
+policy := core.LossPolicy{Rules: []core.LossRule{
+    {Path: "**.thought_signature", Class: translate.LossDropped, Action: core.LossAllow},
+}}
+```
+
+Allowing it loses nothing on a request to a model other than Gemini: that
+model cannot use the signature, and the caller's history keeps it. A client
+that receives a translated Gemini response, though, never sees the
+signature, so its next turn reaches Gemini without it.
+
+Dropped `reasoning_details`, `reasoning_content` and `cache_control`, and
+dropped reasoning items or thinking blocks, reported at `<path>.reasoning`,
+are advisory: the default policy allows and reports them, and a product
+that depends on them rejects them by path.
 
 ## Execution
 

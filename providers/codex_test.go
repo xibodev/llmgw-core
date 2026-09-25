@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -207,7 +208,7 @@ func TestCodexCompleteResponsesAcceptsMissingStreamingContentType(t *testing.T) 
 func TestCodexResponsesRejectsUnsupportedExecutionModes(t *testing.T) {
 	provider, err := NewCodexProvider(CodexProviderConfig{
 		SessionSource: NewCodexTokenSessionSource(auth.NewStaticTokenSource(&auth.Token{AccessToken: "fixture"}), ""),
-		Instructions:  "Required instructions", ResponsesURL: "http://unused",
+		Instructions:  "Required instructions", ResponsesURL: "http://unused", ClientVersion: fixtureCodexClientVersion,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -246,7 +247,7 @@ func TestCodexHTTPErrorExposesOnlyStructuredIdentifiers(t *testing.T) {
 func TestCodexRejectsUnprovenTools(t *testing.T) {
 	provider, err := NewCodexProvider(CodexProviderConfig{
 		SessionSource: NewCodexTokenSessionSource(auth.NewStaticTokenSource(&auth.Token{AccessToken: "fixture"}), ""),
-		Instructions:  "Required instructions", ResponsesURL: "http://unused",
+		Instructions:  "Required instructions", ResponsesURL: "http://unused", ClientVersion: fixtureCodexClientVersion,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -359,10 +360,10 @@ func TestCodexStreamExposesDeltasToolsReasoningAndUsage(t *testing.T) {
 
 func TestCodexRejectsUnsupportedFieldsAndRequiresInstructions(t *testing.T) {
 	source := NewCodexTokenSessionSource(auth.NewStaticTokenSource(&auth.Token{AccessToken: "fixture"}), "")
-	if _, err := NewCodexProvider(CodexProviderConfig{SessionSource: source}); err == nil {
+	if _, err := NewCodexProvider(CodexProviderConfig{SessionSource: source, ClientVersion: fixtureCodexClientVersion}); err == nil {
 		t.Fatal("empty instructions accepted")
 	}
-	provider, err := NewCodexProvider(CodexProviderConfig{SessionSource: source, Instructions: "required", ResponsesURL: "http://unused"})
+	provider, err := NewCodexProvider(CodexProviderConfig{SessionSource: source, Instructions: "required", ResponsesURL: "http://unused", ClientVersion: fixtureCodexClientVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,6 +384,61 @@ func TestCodexRejectsUnsupportedFieldsAndRequiresInstructions(t *testing.T) {
 		if !errors.As(err, &invocation) || !strings.Contains(err.Error(), "unsupported field") {
 			t.Fatalf("unsupported Responses field %q error = %T %v", field, err, err)
 		}
+	}
+}
+
+// A Gemini thought signature has no place in a Codex request, and
+// llm-translate reports dropping it as material. Codex served such
+// histories before the loss was reported, so it still serves them, at every
+// location a Gemini provider puts the signature.
+func TestCodexServesHistoriesWithThoughtSignatures(t *testing.T) {
+	bodies := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies <- string(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}}`+"\n\n")
+	}))
+	defer server.Close()
+	provider := newFixtureCodexProvider(t, server, "Required instructions")
+	_, err := provider.Complete(context.Background(), "exact-model", map[string]any{"messages": []any{
+		map[string]any{"role": "user", "content": "look it up"},
+		map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{
+			"id": "call_1", "type": "function", "thought_signature": "fixture-signature-c",
+			"function":      map[string]any{"name": "lookup", "arguments": "{}", "thought_signature": "fixture-signature-b"},
+			"extra_content": map[string]any{"google": map[string]any{"thought_signature": "fixture-signature-a"}},
+		}}},
+		map[string]any{"role": "tool", "tool_call_id": "call_1", "content": "found"},
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := <-bodies; strings.Contains(body, "fixture-signature") || !strings.Contains(body, `"function_call"`) {
+		t.Fatalf("upstream request = %s, want the tool call without its signatures", body)
+	}
+}
+
+func TestCodexRequiresClientVersionAndSendsItToTheCatalog(t *testing.T) {
+	source := NewCodexTokenSessionSource(auth.NewStaticTokenSource(&auth.Token{AccessToken: "fixture"}), "")
+	for _, version := range []string{"", " \t"} {
+		_, err := NewCodexProvider(CodexProviderConfig{SessionSource: source, Instructions: "required", ClientVersion: version})
+		if err == nil || err.Error() != "Codex client version is required" {
+			t.Fatalf("client version %q: err = %v", version, err)
+		}
+	}
+
+	queries := make(chan url.Values, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries <- r.URL.Query()
+		_, _ = io.WriteString(w, `{"models":[]}`)
+	}))
+	defer server.Close()
+	provider := newFixtureCodexProvider(t, server, "required")
+	if _, err := provider.ListModels(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := (<-queries)["client_version"]; len(got) != 1 || got[0] != fixtureCodexClientVersion {
+		t.Fatalf("catalog client_version = %q, want %q", got, fixtureCodexClientVersion)
 	}
 }
 
@@ -484,11 +540,14 @@ func TestCodexCancellationAndRetryAfter(t *testing.T) {
 	}
 }
 
+const fixtureCodexClientVersion = "fixture-client/1.0"
+
 func newFixtureCodexProvider(t *testing.T, server *httptest.Server, instructions string) *CodexProvider {
 	t.Helper()
 	provider, err := NewCodexProvider(CodexProviderConfig{
 		SessionSource: NewCodexTokenSessionSource(auth.NewStaticTokenSource(&auth.Token{AccessToken: "caller-token", TokenType: "Bearer"}), "account-fixture"),
 		Instructions:  instructions, ResponsesURL: server.URL + "/responses", ModelsURL: server.URL + "/models", Client: server.Client(),
+		ClientVersion: fixtureCodexClientVersion,
 	})
 	if err != nil {
 		t.Fatal(err)

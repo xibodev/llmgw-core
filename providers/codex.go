@@ -35,15 +35,24 @@ var codexErrorIdentifier = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 // CodexSession is the storage-neutral authenticated state needed by the
 // official Codex transport. The source remains responsible for refresh and
 // persistence; the transport asks it for current state on every operation.
+//
+// Deprecated: CodexSession serves only CodexProvider. Codex reads the token
+// and account from each request's core.Credential instead.
 type CodexSession struct {
 	Token     *auth.Token
 	AccountID string
 }
 
+// CodexSessionSource supplies the session CodexProvider authenticates with.
+//
+// Deprecated: it serves only CodexProvider. Use Codex.
 type CodexSessionSource interface {
 	Session(context.Context) (CodexSession, error)
 }
 
+// CodexSessionSourceFunc adapts a function to CodexSessionSource.
+//
+// Deprecated: it serves only CodexProvider. Use Codex.
 type CodexSessionSourceFunc func(context.Context) (CodexSession, error)
 
 func (f CodexSessionSourceFunc) Session(ctx context.Context) (CodexSession, error) {
@@ -52,6 +61,9 @@ func (f CodexSessionSourceFunc) Session(ctx context.Context) (CodexSession, erro
 
 // NewCodexTokenSessionSource adapts llm-provider-auth's TokenSource for callers
 // whose optional ChatGPT account identity is fixed outside token storage.
+//
+// Deprecated: it serves only CodexProvider. Use Codex, and keep the token in
+// a core.CredentialStore that the Runtime refreshes with NewCodexRefresh.
 func NewCodexTokenSessionSource(source auth.TokenSource, accountID string) CodexSessionSource {
 	return CodexSessionSourceFunc(func(ctx context.Context) (CodexSession, error) {
 		if source == nil {
@@ -62,6 +74,9 @@ func NewCodexTokenSessionSource(source auth.TokenSource, accountID string) Codex
 	})
 }
 
+// CodexProviderConfig configures CodexProvider.
+//
+// Deprecated: Use CodexConfig and NewCodex.
 type CodexProviderConfig struct {
 	SessionSource CodexSessionSource
 	Instructions  string
@@ -78,16 +93,28 @@ type CodexProviderConfig struct {
 }
 
 // CodexProvider is the authenticated official Codex Responses transport.
+//
+// Deprecated: Use Codex, which implements core.Provider. It takes the
+// credential from each request, so a Runtime can refresh it and replay a
+// rejected request, and it lists only the models an account can use.
+// CodexProvider shares its transport, so both send identical requests.
 type CodexProvider struct {
 	sessions  CodexSessionSource
 	transport codexTransport
 }
 
+// NewCodexProvider returns a CodexProvider.
+//
+// Deprecated: Use NewCodex.
 func NewCodexProvider(config CodexProviderConfig) (*CodexProvider, error) {
 	if config.SessionSource == nil {
 		return nil, fmt.Errorf("Codex session source is required")
 	}
-	transport, err := newCodexTransport(config)
+	transport, err := newCodexTransport(CodexConfig{
+		Instructions: config.Instructions, ClientVersion: config.ClientVersion,
+		ResponsesURL: config.ResponsesURL, ModelsURL: config.ModelsURL,
+		Client: config.Client, Now: config.Now,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -106,8 +133,8 @@ type codexTransport struct {
 	now           func() time.Time
 }
 
-// newCodexTransport validates and defaults every field but SessionSource.
-func newCodexTransport(config CodexProviderConfig) (codexTransport, error) {
+// newCodexTransport validates config and applies its defaults.
+func newCodexTransport(config CodexConfig) (codexTransport, error) {
 	if strings.TrimSpace(config.Instructions) == "" {
 		return codexTransport{}, fmt.Errorf("Codex instructions are required")
 	}
@@ -319,18 +346,20 @@ func (t codexTransport) chatRequest(model string, payload map[string]any) (map[s
 }
 
 // nativeRequest shapes a Responses payload into a Codex Responses request.
+// A malformed payload is an invalid request; a valid one Codex cannot serve
+// is unsupported, because another Responses target may serve it.
 func (t codexTransport) nativeRequest(model string, payload map[string]any) (map[string]any, error) {
 	if model == "" || strings.TrimSpace(model) != model {
-		return nil, &InvocationError{Msg: "Codex model ID is required"}
+		return nil, &InvocationError{Msg: "Codex model ID is required", class: core.ProviderErrorInvalidRequest}
 	}
 	if payload == nil || payload["input"] == nil {
-		return nil, &InvocationError{Msg: "Codex Responses input is required"}
+		return nil, &InvocationError{Msg: "Codex Responses input is required", class: core.ProviderErrorInvalidRequest}
 	}
 	if store, ok := payload["store"].(bool); ok && store {
-		return nil, &InvocationError{Msg: "Codex Responses does not support store=true"}
+		return nil, &InvocationError{Msg: "Codex Responses does not support store=true", class: core.ProviderErrorUnsupported}
 	}
 	if background, ok := payload["background"].(bool); ok && background {
-		return nil, &InvocationError{Msg: "Codex Responses does not support background=true"}
+		return nil, &InvocationError{Msg: "Codex Responses does not support background=true", class: core.ProviderErrorUnsupported}
 	}
 	request := make(map[string]any, len(payload)+3)
 	allowed := map[string]bool{
@@ -341,7 +370,7 @@ func (t codexTransport) nativeRequest(model string, payload map[string]any) (map
 	}
 	for key, value := range payload {
 		if value != nil && !allowed[key] {
-			return nil, &InvocationError{Msg: "Codex Responses request contains unsupported field " + key}
+			return nil, &InvocationError{Msg: "Codex Responses request contains unsupported field " + key, class: core.ProviderErrorUnsupported}
 		}
 	}
 	for _, key := range []string{
@@ -353,12 +382,12 @@ func (t codexTransport) nativeRequest(model string, payload map[string]any) (map
 		}
 	}
 	if err := validateCodexTools(request["tools"]); err != nil {
-		return nil, &InvocationError{Msg: "Codex Responses request contains unsupported tools", Cause: err}
+		return nil, &InvocationError{Msg: "Codex Responses request contains unsupported tools", Cause: err, class: core.ProviderErrorUnsupported}
 	}
 	if instructions, exists := request["instructions"]; exists && instructions != nil {
 		text, ok := instructions.(string)
 		if !ok {
-			return nil, &InvocationError{Msg: "Codex Responses instructions must be a string"}
+			return nil, &InvocationError{Msg: "Codex Responses instructions must be a string", class: core.ProviderErrorInvalidRequest}
 		}
 		if text != "" {
 			request["instructions"] = t.instructions + "\n\n" + text
@@ -433,11 +462,11 @@ func validateCodexTools(value any) error {
 func (t codexTransport) post(ctx context.Context, payload map[string]any, authorize codexAuthorizer) (*http.Response, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, &InvocationError{Msg: "Codex request encoding failed", Cause: err}
+		return nil, &InvocationError{Msg: "Codex request encoding failed", Cause: err, class: core.ProviderErrorInvalidRequest}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.responsesURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, &InvocationError{Msg: "Codex request could not be created", Cause: err}
+		return nil, &InvocationError{Msg: "Codex request could not be created", Cause: err, class: core.ProviderErrorConfiguration}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -453,6 +482,7 @@ func (t codexTransport) post(ctx context.Context, payload map[string]any, author
 		return nil, &InvocationError{
 			Msg: "Codex transport failed", Retryable: upstreamFailure,
 			FailoverEligible: upstreamFailure, CircuitFailure: upstreamFailure, Cause: err,
+			class: core.ProviderErrorTransport,
 		}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -1002,7 +1032,7 @@ func anySlice(value any) []any {
 }
 
 func invocationDecodeError(err error) error {
-	return &InvocationError{Msg: "Codex streaming response is invalid", CircuitFailure: true, Cause: err}
+	return &InvocationError{Msg: "Codex streaming response is invalid", CircuitFailure: true, Cause: err, class: core.ProviderErrorUpstream}
 }
 
 func invocationHTTPError(response *http.Response) error {

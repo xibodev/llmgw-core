@@ -19,6 +19,9 @@ type InvocationError struct {
 	RetryAfter        time.Duration
 	Cause             error
 	upstreamTransport bool
+	// class says what failed, for a provider that reports the canonical
+	// *core.ProviderError. A status class comes from Status instead.
+	class core.ProviderErrorClass
 }
 
 func (e *InvocationError) Unwrap() error { return e.Cause }

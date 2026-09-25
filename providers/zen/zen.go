@@ -15,7 +15,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -273,43 +272,7 @@ func (c *Client) discoverSnapshot(ctx context.Context) (core.CatalogEvidence, me
 		}
 		return core.CatalogEvidence{Status: status, ObservedAt: observedAt}, metadataProvider{}, err
 	}
-
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(metadataRaw, &root); err != nil {
-		return core.CatalogEvidence{Status: core.CatalogFailed, ObservedAt: observedAt}, metadataProvider{}, errors.New("decode models.dev catalog")
-	}
-	providerRaw, ok := root["opencode"]
-	if !ok {
-		return core.CatalogEvidence{Status: core.CatalogFailed, ObservedAt: observedAt}, metadataProvider{}, errors.New("models.dev catalog has no opencode provider")
-	}
-	var metadata metadataProvider
-	if err := json.Unmarshal(providerRaw, &metadata); err != nil || metadata.Models == nil {
-		return core.CatalogEvidence{Status: core.CatalogFailed, ObservedAt: observedAt}, metadataProvider{}, errors.New("decode models.dev opencode provider")
-	}
-
-	models := make([]core.ModelInfo, 0, len(metadata.Models))
-	for key, model := range metadata.Models {
-		if model.ID != key || model.ID == "" {
-			continue
-		}
-		if !admittedStatus(model.Status) || !inputCostZero(model.Cost) {
-			continue
-		}
-		surface, ok := nativeSurface(metadata.NPM, model)
-		if !ok {
-			continue
-		}
-		models = append(models, core.ModelInfo{
-			ID: key, Object: "model", OwnedBy: c.providerID,
-			Description: model.Name, Capabilities: capabilities(model, surface, observedAt, c.capabilityTTL),
-		})
-	}
-	sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
-	status := core.CatalogDiscovered
-	if len(models) == 0 {
-		status = core.CatalogEmpty
-	}
-	return core.CatalogEvidence{Status: status, Models: models, ObservedAt: observedAt}, metadata, nil
+	return snapshot(metadataRaw, NormalizeOptions{ProviderID: c.providerID, ObservedAt: observedAt, CapabilityTTL: c.capabilityTTL})
 }
 
 // DiscoverVerified is the optional strict policy: a snapshot model must also
@@ -323,26 +286,7 @@ func (c *Client) DiscoverVerified(ctx context.Context) (core.CatalogEvidence, er
 	if err != nil {
 		return core.CatalogEvidence{Status: core.CatalogFailed, ObservedAt: public.ObservedAt}, err
 	}
-	var catalog catalogEnvelope
-	if json.Unmarshal(raw, &catalog) != nil || catalog.Data == nil {
-		return core.CatalogEvidence{Status: core.CatalogFailed, ObservedAt: public.ObservedAt}, errors.New("decode Zen catalog")
-	}
-	live := make(map[string]bool, len(catalog.Data))
-	for _, row := range catalog.Data {
-		live[strings.TrimSpace(row.ID)] = true
-	}
-	verified := public.Models[:0]
-	for _, model := range public.Models {
-		metadataModel := metadata.Models[model.ID]
-		if live[model.ID] && verifiedStatus(metadataModel.Status) && exactZeroCost(metadataModel.Cost) {
-			verified = append(verified, model)
-		}
-	}
-	public.Models = verified
-	if len(verified) == 0 {
-		public.Status = core.CatalogEmpty
-	}
-	return public, nil
+	return verify(public, metadata, raw)
 }
 
 func verifiedStatus(status string) bool {

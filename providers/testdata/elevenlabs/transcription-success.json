@@ -1,0 +1,29 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/speech-to-text",
+    "auth_header": "xi-api-key",
+    "model_id": "scribe_v2",
+    "language_code": "en",
+    "file_name": "sample.wav",
+    "file_base64": "UklGRmZpeHR1cmU="
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json",
+    "body": {
+      "language_code": "en",
+      "language_probability": 0.98,
+      "text": "Hello world!",
+      "words": [
+        {
+          "start": 0,
+          "end": 0.5,
+          "text": "Hello",
+          "type": "word",
+          "speaker_id": "speaker_1"
+        }
+      ]
+    }
+  }
+}

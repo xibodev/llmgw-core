@@ -1,0 +1,34 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/chat/completions",
+    "auth_header": "Api-Key",
+    "model": "mimo-v2.5-tts",
+    "voice": "Mia",
+    "format": "wav",
+    "input_role": "assistant",
+    "input": "Hello from MiMo."
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json",
+    "body": {
+      "id": "chatcmpl-audio-fixture",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "audio": {
+              "id": "audio-fixture",
+              "data": "UklGRmZpeHR1cmUtd2F2",
+              "format": "wav"
+            }
+          },
+          "finish_reason": "stop"
+        }
+      ]
+    }
+  }
+}

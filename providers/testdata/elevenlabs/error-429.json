@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/text-to-speech/voice-fixture",
+    "auth_header": "xi-api-key"
+  },
+  "response": {
+    "status": 429,
+    "content_type": "application/json",
+    "retry_after": "2",
+    "body": {
+      "detail": {
+        "status": "too_many_concurrent_requests",
+        "message": "fixture quota reached"
+      }
+    }
+  }
+}

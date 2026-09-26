@@ -16,8 +16,8 @@ import (
 
 func TestRegistryIntegrityAndManifest(t *testing.T) {
 	entries := providers.ProviderRegistry()
-	if len(entries) != 25 {
-		t.Fatalf("expected 25 registry entries, got %d", len(entries))
+	if len(entries) != 27 {
+		t.Fatalf("expected 27 registry entries, got %d", len(entries))
 	}
 
 	seen := make(map[string]bool)
@@ -42,6 +42,13 @@ func TestRegistryIntegrityAndManifest(t *testing.T) {
 	canonical := providers.CanonicalRegistryID("zen")
 	if canonical != "opencode_zen" {
 		t.Fatalf("expected canonical id 'opencode_zen', got %s", canonical)
+	}
+
+	for _, id := range []string{"elevenlabs", "mimo"} {
+		entry, ok := providers.RegistryProvider(id)
+		if !ok || entry.Availability != providers.ProviderAvailable || !entry.RequiresAPIKey {
+			t.Fatalf("audio provider %q is not available with API-key auth: %+v", id, entry)
+		}
 	}
 }
 

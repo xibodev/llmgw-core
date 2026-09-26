@@ -250,6 +250,12 @@ translating through llm-translate:
 - Chat Completions over Responses.
 - Responses over Chat Completions.
 
+`translation.ChatTranscriptionAdapter` is the explicit audio counterpart. It
+serves `audio_transcriptions` by sending multipart audio as an `input_audio`
+Chat Completions part and normalizes the answer to `{"text": ...}`. Its
+`Enabled(model)` callback is mandatory: products opt in a provider or exact
+model rows, and the adapter never guesses capability from a model id.
+
 ### Catalogs
 
 `catalog.Service` keeps catalogs as the gateway does, as instance state over
@@ -388,6 +394,20 @@ return translation.Adapter{Provider: provider}, nil // Messages over Chat
   set with `Retry-After`. A native Responses 404 or 405 is a
   `*core.SurfaceError`, and a catalog failure's `*providers.CatalogError`
   has a `CatalogCode*` code.
+
+## ElevenLabs and Xiaomi MiMo audio
+
+`providers.ElevenLabs` serves `audio_transcriptions` through ElevenLabs Scribe
+and `audio_speech` through synchronous text-to-speech. It maps the OpenAI
+multipart upload to `/v1/speech-to-text`, uses `xi-api-key`, takes the TTS voice
+from the request, and returns the upstream audio content type. Its catalog rows
+declare exactly one audio surface each.
+
+`providers.MiMo` serves `audio_speech` for the explicitly configured MiMo TTS
+models. It maps an OpenAI speech request to MiMo's Chat Completions audio
+contract, authenticates with `Api-Key`, decodes the returned base64 audio, and
+returns it as binary audio. Both providers accept model lists in their config;
+nil selects the reviewed defaults and an empty list disables the surface.
 
 ## Anthropic
 

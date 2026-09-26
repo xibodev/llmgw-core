@@ -1,0 +1,16 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/text-to-speech/voice-fixture",
+    "auth_header": "xi-api-key",
+    "model_id": "eleven_flash_v2_5",
+    "voice": "voice-fixture",
+    "input": "Hello from the fixture.",
+    "output_format": "mp3_44100_128"
+  },
+  "response": {
+    "status": 200,
+    "content_type": "audio/mpeg",
+    "body_base64": "SUQzZml4dHVyZS1hdWRpbw=="
+  }
+}

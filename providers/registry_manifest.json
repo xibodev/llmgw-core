@@ -494,6 +494,61 @@
     "docs_url": "https://learn.microsoft.com/en-us/microsoft-edge/"
   },
   {
+    "id": "elevenlabs",
+    "label": "ElevenLabs",
+    "description": "Native ElevenLabs speech-to-text and text-to-speech through the OpenAI audio surfaces.",
+    "categories": [
+      "audio",
+      "api-key",
+      "direct"
+    ],
+    "runtime_type": "elevenlabs",
+    "protocol": "audio",
+    "availability": "available",
+    "auth_methods": [
+      "api_key"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "elevenlabs",
+    "default_base_url": "https://api.elevenlabs.io/v1",
+    "requires_api_key": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "api_key"
+    ],
+    "risk_level": "green",
+    "docs_url": "https://elevenlabs.io/docs/api-reference/introduction"
+  },
+  {
+    "id": "mimo",
+    "aliases": [
+      "xiaomi-mimo"
+    ],
+    "label": "Xiaomi MiMo",
+    "description": "MiMo text-to-speech models served through its Chat Completions audio contract.",
+    "categories": [
+      "audio",
+      "api-key",
+      "direct"
+    ],
+    "runtime_type": "mimo",
+    "protocol": "openai",
+    "availability": "available",
+    "auth_methods": [
+      "api_key"
+    ],
+    "connection_scope": "system_or_personal",
+    "default_provider_id": "mimo",
+    "default_base_url": "https://api.xiaomimimo.com/v1",
+    "requires_api_key": true,
+    "supports_model_discovery": true,
+    "onboarding_fields": [
+      "api_key"
+    ],
+    "risk_level": "green",
+    "docs_url": "https://github.com/XiaomiMiMo/MiMo-Skills/tree/main/skills/mimo-v2-5-tts"
+  },
+  {
     "id": "custom_openai",
     "aliases": [
       "openai-compatible"

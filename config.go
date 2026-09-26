@@ -6,7 +6,7 @@ import (
 
 // ProviderConfig configures a single upstream provider backend.
 type ProviderConfig struct {
-	Type          string            `json:"type"`                     // "openai_compatible", "anthropic", "googleai", "ollama", "github_copilot", "codex", "edgetts"
+	Type          string            `json:"type"`                     // "openai_compatible", "anthropic", "googleai", "ollama", "elevenlabs", "mimo", "github_copilot", "codex", "edgetts"
 	BaseURL       string            `json:"base_url,omitempty"`       // Upstream base endpoint
 	APIKey        string            `json:"api_key,omitempty"`        // Static API key or token
 	Timeout       time.Duration     `json:"timeout,omitempty"`        // Request timeout

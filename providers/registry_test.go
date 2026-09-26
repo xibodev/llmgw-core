@@ -15,7 +15,7 @@ import (
 // manifest must be fully runnable by it.
 var gatewayRuntimeTypes = []string{
 	"openai_compatible", "anthropic", "bedrock", "github_copilot", "ollama", "litellm", "edge_tts",
-	"ai_studio", "vertex_ai", "azure_openai", "google_antigravity",
+	"ai_studio", "vertex_ai", "azure_openai", "google_antigravity", "elevenlabs", "mimo",
 }
 
 func validEntry(id string) providers.RegistryEntry {
@@ -41,8 +41,8 @@ func ptr[T any](value T) *T { return &value }
 func TestDefaultRegistryIsValidAndRunnable(t *testing.T) {
 	t.Parallel()
 	registry := providers.DefaultRegistry()
-	if registry.Len() != 25 {
-		t.Fatalf("default registry has %d entries, want 25", registry.Len())
+	if registry.Len() != 27 {
+		t.Fatalf("default registry has %d entries, want 27", registry.Len())
 	}
 	if providers.DefaultRegistry() != registry {
 		t.Fatal("DefaultRegistry must return one shared immutable registry")
@@ -395,10 +395,10 @@ func TestProductMetadataIsExpressibleAsOverlay(t *testing.T) {
 	if err := json.Unmarshal(openai.Extensions["facet"], &flags); err != nil || !flags.CreateAllowed {
 		t.Fatalf("product extension=%s err=%v", openai.Extensions["facet"], err)
 	}
-	if _, ok := product.ByID("edge_tts"); ok || product.Len() != 25 {
-		t.Fatalf("len=%d: want 25 entries after one removal and one addition", product.Len())
+	if _, ok := product.ByID("edge_tts"); ok || product.Len() != 27 {
+		t.Fatalf("len=%d: want 27 entries after one removal and one addition", product.Len())
 	}
-	if providers.DefaultRegistry().Len() != 25 {
+	if providers.DefaultRegistry().Len() != 27 {
 		t.Fatal("an overlay changed the default registry")
 	}
 }

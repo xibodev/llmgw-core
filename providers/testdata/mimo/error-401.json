@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/chat/completions",
+    "auth_header": "Api-Key"
+  },
+  "response": {
+    "status": 401,
+    "content_type": "application/json",
+    "body": {
+      "error": {
+        "code": "invalid_api_key",
+        "message": "fixture credential rejected"
+      }
+    }
+  }
+}

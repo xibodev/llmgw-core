@@ -64,14 +64,10 @@ type AnthropicConfig struct {
 // Chat Completions means translating, which is left to a
 // translation.Adapter in front.
 //
-// Each operation authenticates with the credential it is given, through
-// llm-provider-auth's anthropic.HeaderSource: an API key is sent as
-// x-api-key, and a setup token, of kind core.TokenTypeAnthropicSetupToken,
-// as the OAuth bearer with Anthropic's beta marker. Like the gateway, the
-// header source also recognizes a setup token given as an API key. A setup
-// token's completion is requested as a stream, as the gateway requests it,
-// and Invoke assembles the message. Without a credential nothing
-// authenticates, for an Anthropic-compatible endpoint that needs none.
+// Each operation authenticates with the credential it is given: an API key
+// is sent as x-api-key, and a credential of any other kind is refused before
+// anything is sent. Without a credential nothing authenticates, for an
+// Anthropic-compatible endpoint that needs none.
 type Anthropic struct {
 	baseURL               string
 	client, catalogClient *http.Client
@@ -127,8 +123,7 @@ func (p *Anthropic) PreservesWire(_ string, surface core.ModelSurface) bool {
 
 // Invoke performs one Messages request. The answer is returned as Anthropic
 // sent it once it checks out as the gateway checks it: a JSON object with a
-// content array. With a setup token, it is the message assembled from the
-// stream requested instead.
+// content array.
 func (p *Anthropic) Invoke(ctx context.Context, request core.Request) (core.Response, error) {
 	call, err := p.prepare(ctx, request, false)
 	if err != nil {
@@ -354,7 +349,7 @@ func (s *anthropicStream) Next() ([]byte, error) {
 func (s *anthropicStream) Close() error { return s.body.Close() }
 
 // readAnthropicStreamedMessage assembles the message a Messages stream
-// carries, as the gateway assembles a setup token's completion: the
+// carries: the
 // message_start message, each content block as it stops with its text,
 // thinking, signature and tool input deltas, and message_delta's fields and
 // usage. A stream that is not JSON, reports an error, ends incomplete or

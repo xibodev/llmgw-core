@@ -22,18 +22,15 @@ go get github.com/xibodev/llmgw-core
 
 ### Dependencies
 
-- **llm-provider-auth v0.6.0.** Its `codex` package no longer supplies a
-  client version, so `providers.NewCodex` and `NewCodexProvider` require
-  `ClientVersion`, the version of the product making the call, and return an
-  error when it is blank. The providers send it to the Codex catalog as
-  `client_version`. `ResponsesURL` and `ModelsURL` still default to the
-  canonical Codex endpoints.
+- **llm-provider-auth v1.0.0.** Credentials are stored through its
+  `tokenstore` contract, browser sign-in runs on its `browseroauth` package,
+  and Google service accounts mint tokens through its `gcp` package.
 - **llm-translate v0.3.0.** Conversions report the vendor fields inside
   messages that the target surface cannot carry, and the translation adapter
-  enforces those losses; see [Loss policy](#loss-policy). The Anthropic and
-  Codex providers have no loss report, so they keep serving the histories
-  they served before. The Anthropic provider carries the `cache_control` of
-  Chat text parts into the Messages request, system prompt included.
+  enforces those losses; see [Loss policy](#loss-policy). The Anthropic
+  provider has no loss report, so it keeps serving the histories it served
+  before, and it carries the `cache_control` of Chat text parts into the
+  Messages request, system prompt included.
 
 ## Quick Start (Embedded in 15 Lines)
 
@@ -193,7 +190,7 @@ const TokenTypeAnthropicSetupToken = "anthropic_setup_token"
   `Capabilities`.
 - **Preservation.** `PreservesWire` is true when every layer serves the
   surface natively and the nearest `WirePreserver` says so. Serving Chat
-  natively by converting it, as Codex does, is not preserving it, and a
+  natively by converting it internally is not preserving it, and a
   response transport label reads only this declaration. A decorator exposes
   what it wraps through `Unwrap() Provider`, as `translation.Adapter` does.
 - **Token counts.** `CountTokens` finds the nearest `TokenCounter` the same
@@ -288,8 +285,8 @@ The gateway's transport-mode decisions, as pure helpers over `PlanTransport`:
   freshness, an hour by default, without upgrading its confidence.
 - `TransportInterfaces` offers the chat surfaces a row lists, native where
   `PreservesWireFor` says the provider preserves the wire for the credential.
-  A `CredentialWirePreserver` answers per credential: anonymous Zen preserves
-  nothing. Codex preserves Responses, Copilot Chat and listed Responses.
+  A `CredentialWirePreserver` answers per credential, so a provider may
+  preserve a surface for one credential and nothing for another.
 - `ParseSurfacePath`, `ParseTransportRequirement`, `ListingSurfaces` and
   `ResponseTransportMode` port the path and header parsing, the model list's
   native and emulated surfaces, and the response label.
@@ -405,18 +402,14 @@ provider, err := providers.NewAnthropic(providers.AnthropicConfig{
 })
 ```
 
-- **Credential.** An API key is sent as `x-api-key`. A setup token, a
-  credential of kind `core.TokenTypeAnthropicSetupToken`, goes through
-  llm-provider-auth's `anthropic.HeaderSource` as the OAuth bearer with its
-  beta marker; like the gateway, the header source also recognizes one given
-  as an API key. Without a credential nothing authenticates, for an
-  Anthropic-compatible endpoint that needs none. A credential of another
-  kind is refused before anything is sent.
+- **Credential.** An API key is sent as `x-api-key`; a credential of any
+  other kind is refused before anything is sent. Without a credential
+  nothing authenticates, for an Anthropic-compatible endpoint that needs
+  none.
 - **Surfaces.** Messages only, and preserved: the body passes through with
   the request's model and the operation's stream flag, the answer comes back
   as Anthropic sent it, and `core.PreservesWire` reports it, so a product
-  labels it native. A setup token's completion is requested as a stream and
-  assembled, as in the gateway. A stream is relayed byte for byte and fails
+  labels it native. A stream is relayed byte for byte and fails
   if it ends before `message_stop`. `translation.Adapter` has no route from
   Chat Completions to Messages, so a Chat client needs another target.
 - **Preamble.** The hook's text goes before the system prompt, as the
@@ -563,46 +556,45 @@ Providers: func(s Settings, instance string) (core.Provider, error) {
   set with `Retry-After`. A stream that breaks off may be repeated, as in
   the gateway.
 
-## Edge TTS
+## Extensions
 
-`providers.EdgeTTS` is the vertical for the speech service behind Microsoft
-Edge's read-aloud feature, on the `audio_speech` surface. Core has no
-websocket client, so the product supplies the dialer.
+Providers core does not carry are served by an extension daemon: a separate
+process a product runs beside it. The `extension` package is the client of
+the daemon's HTTP protocol. `extension.Client` lists what the daemon serves,
+runs operations, refreshes credentials and signs in, and `extension.Provider`
+adapts one daemon provider to `core.Provider`, so a Runtime routes to it like
+any other provider.
 
 ```go
-type WebSocketDialer func(ctx context.Context, url string, header http.Header, subprotocols []string) (WebSocketConn, *http.Response, error)
-type WebSocketConn interface {
-    WriteText(ctx context.Context, data []byte) error
-    Read(ctx context.Context) (messageType int, data []byte, err error)
-    Close() error
+client, err := extension.NewClient(extension.Config{
+    BaseURL: "http://127.0.0.1:18888",
+    Secret:  secret, // the daemon's shared secret
+})
+info, err := client.Info(ctx)
+for _, served := range info.Providers {
+    provider := extension.NewProvider(client, served)
+    // served.CredentialKind() is oauth, token or none.
 }
-
-speech, err := providers.NewEdgeTTS(providers.EdgeTTSConfig{Dial: dial}) // Dial is required
+coordinator, err := tokenstore.NewCoordinator(store, client.RefreshFunc("example"))
 ```
 
-- **Dialer.** Over gorilla/websocket it is a `Dialer` with the given
-  `Subprotocols`, and a connection whose `WriteText` is
-  `WriteMessage(websocket.TextMessage, data)` and whose `Read` is
-  `ReadMessage`, each applying the context's deadline. A refused handshake
-  returns its response, whose `Date` teaches the clock skew. `Close` must be
-  safe to call concurrently with the other methods.
-- **Requests.** `Invoke` takes an OpenAI speech request and answers with
-  `audio/mpeg`. The model names the voice, and `default` the configured
-  default voice; a body `voice` naming another is reported as a loss, not
-  read. `speed` becomes the prosody rate as the gateway maps it, and a
-  `response_format` other than mp3 is refused. `Synthesize` takes a voice,
-  text and rate, as the gateway's speech endpoint calls its synthesizer.
-- **Frames** are the gateway's byte for byte: the speech configuration, then
-  SSML with the text cleaned, escaped and split into 4096-byte messages,
-  each over its own connection signed with `Sec-MS-GEC`. A voice or rate the
-  SSML cannot carry is refused, and a chunk never ends inside a character.
-  A 403 teaches the instance its clock skew, and the dial is retried once.
-- **Credential.** Optional. An API key, or a token, is the access token;
-  without one the read-aloud feature's public token is sent.
-- **Catalog.** `ListModels` lists the voices, each a Microsoft model serving
-  `/v1/audio/speech`. A list that cannot be read is a catalog failure.
-- **Errors** are `*core.ProviderError`. A refused handshake carries its
-  status, and no error quotes the signed URL.
+- **Credentials** stay with the product. The daemon keeps none: every
+  operation carries its credential in headers, a refresh returns the renewed
+  record for the product to store, and the product serializes refreshes
+  under its own lease, as `tokenstore.Coordinator` does.
+- **Sign-in.** `Client.OAuthDriver` is a device and code driver, so
+  `oauthflow.Service` runs a daemon provider's sign-in like any other.
+- **Errors** are `*core.ProviderError`, classified from the daemon's status
+  as core classifies any upstream failure. A refused refresh is an
+  `*extension.RefreshError`, terminal when the provider rejected the grant.
+- **Timeouts.** Without a context deadline, an invoke is bounded by
+  `DefaultTimeout` and info, models, refresh and sign-in steps by
+  `DefaultControlTimeout`, which stays inside `tokenstore.Coordinator`'s
+  default lease wait. A stream has no deadline but the caller's.
+- **Security.** Anyone who can reach a daemon can use its keyless providers.
+  Bind it to the loopback interface and start it with a secret.
+
+The package documentation specifies the protocol for anyone writing a daemon.
 
 ## Execution
 
@@ -723,7 +715,7 @@ svc, err := oauthflow.New(oauthflow.Options{
     Drivers:       driverFor,       // (instance, method) -> Driver
     CredentialKey: keyFor,          // product policy
 })
-view, err := svc.Start(ctx, caller, "antigravity", oauthflow.MethodBrowser,
+view, err := svc.Start(ctx, caller, "example", oauthflow.MethodBrowser,
     oauthflow.WithRedirectURI(callbackURL))
 view, err = svc.Callback(ctx, oauthflow.CompleteInput{Code: code, State: state})
 ```

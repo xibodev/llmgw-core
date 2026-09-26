@@ -1,0 +1,44 @@
+{
+  "method": "POST",
+  "path": "/responses",
+  "headers": {
+    "Accept": "application/json",
+    "Accept-Encoding": "gzip",
+    "Authorization": "Bearer <redacted>",
+    "Chatgpt-Account-Id": "account-fixture",
+    "Content-Length": "351",
+    "Content-Type": "application/json",
+    "Openai-Beta": "responses=experimental",
+    "Originator": "codex_cli_rs",
+    "User-Agent": "OpenAI/Go 3.22.0",
+    "X-Stainless-Arch": "<runtime>",
+    "X-Stainless-Lang": "go",
+    "X-Stainless-Os": "<runtime>",
+    "X-Stainless-Package-Version": "3.22.0",
+    "X-Stainless-Retry-Count": "0",
+    "X-Stainless-Runtime": "go",
+    "X-Stainless-Runtime-Version": "<runtime>"
+  },
+  "body": {
+    "model": "exact-model",
+    "input": "continue",
+    "instructions": "Required instructions\n\nCaller instructions",
+    "tools": [
+    {
+      "type": "web_search"
+    }
+    ],
+    "prompt_cache_key": "fixture-cache",
+    "previous_response_id": "resp_previous",
+    "conversation": "conv_1",
+    "include": [
+    "reasoning.encrypted_content"
+    ],
+    "reasoning": {
+      "effort": "high",
+      "summary": "auto"
+    },
+    "stream": true,
+    "store": false
+  }
+}

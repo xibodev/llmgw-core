@@ -1,0 +1,63 @@
+{
+  "models": [
+    {
+      "slug": "codex-fixture-large",
+      "display_name": "Codex Fixture Large",
+      "description": "Synthetic row carrying every optional field",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {"effort": "low", "description": "Synthetic low effort"},
+        {"effort": "medium", "description": "Synthetic medium effort"},
+        {"effort": "high", "description": "Synthetic high effort"}
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 1,
+      "upgrade": null,
+      "base_instructions": "Synthetic base instructions.",
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "auto",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "truncation_policy": {"mode": "tokens", "limit": 10000},
+      "supports_parallel_tool_calls": true,
+      "context_window": 272000,
+      "auto_compact_token_limit": null,
+      "effective_context_window_percent": 95,
+      "experimental_supported_tools": [],
+      "input_modalities": ["text", "image"]
+    },
+    {
+      "slug": "codex-fixture-small",
+      "display_name": "Codex Fixture Small",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 2
+    },
+    {
+      "slug": "codex-fixture-hidden",
+      "display_name": "Codex Fixture Hidden",
+      "visibility": "hide",
+      "supported_in_api": true,
+      "priority": 3
+    },
+    {
+      "slug": "codex-fixture-app-only",
+      "display_name": "Codex Fixture App Only",
+      "visibility": "list",
+      "supported_in_api": false,
+      "priority": 4
+    },
+    {
+      "slug": "codex-fixture-unlisted",
+      "visibility": "none",
+      "supported_in_api": true
+    },
+    {
+      "slug": "codex-fixture-unasserted",
+      "visibility": "list"
+    }
+  ]
+}

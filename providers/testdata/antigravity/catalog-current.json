@@ -1,0 +1,85 @@
+{
+  "models": {
+    "gemini-fixture-pro": {
+      "displayName": "Gemini Fixture Pro",
+      "supportsImages": true,
+      "supportsThinking": true,
+      "supportsVideo": true,
+      "thinkingBudget": 1024,
+      "minThinkingBudget": 128,
+      "recommended": true,
+      "maxTokens": 1048576,
+      "maxOutputTokens": 65535,
+      "tokenizerType": "FIXTURE_TOKENIZER",
+      "model": "MODEL_PLACEHOLDER_FIXTURE_1",
+      "apiProvider": "API_PROVIDER_FIXTURE",
+      "modelProvider": "MODEL_PROVIDER_FIXTURE",
+      "quotaInfo": {
+        "remainingFraction": 0.75,
+        "resetTime": "2026-01-01T00:00:00Z"
+      },
+      "supportedMimeTypes": {
+        "application/pdf": true,
+        "image/png": true,
+        "video/mp4": true
+      }
+    },
+    "claude-fixture-thinking": {
+      "displayName": "Claude Fixture (Thinking)",
+      "supportsImages": true,
+      "supportsThinking": true,
+      "maxTokens": 200000,
+      "maxOutputTokens": 64000,
+      "model": "MODEL_PLACEHOLDER_FIXTURE_2",
+      "apiProvider": "API_PROVIDER_FIXTURE",
+      "modelProvider": "MODEL_PROVIDER_FIXTURE",
+      "quotaInfo": {
+        "remainingFraction": 1,
+        "resetTime": "2026-01-01T00:00:00Z"
+      },
+      "supportedMimeTypes": {
+        "image/png": true
+      }
+    },
+    "gemini-fixture-flash": {
+      "displayName": "Gemini Fixture Flash",
+      "supportsImages": false,
+      "supportsThinking": false,
+      "recommended": false,
+      "maxTokens": 1048576,
+      "quotaInfo": {
+        "remainingFraction": 0
+      }
+    },
+    "gemini-fixture-image": {
+      "displayName": "Gemini Fixture Image",
+      "supportsImages": true,
+      "model": "MODEL_PLACEHOLDER_FIXTURE_3",
+      "quotaInfo": {
+        "remainingFraction": 0.5,
+        "resetTime": "2026-01-01T00:00:00Z"
+      }
+    },
+    "tab_fixture_flash_lite": {
+      "quotaInfo": {
+        "remainingFraction": 1
+      }
+    }
+  },
+  "defaultAgentModelId": "gemini-fixture-pro",
+  "agentModelSorts": [
+    {
+      "displayName": "Recommended",
+      "groups": [
+        {
+          "modelIds": ["gemini-fixture-pro", "claude-fixture-thinking"]
+        }
+      ]
+    }
+  ],
+  "commandModelIds": ["gemini-fixture-flash"],
+  "tabModelIds": ["tab_fixture_flash_lite"],
+  "mqueryModelIds": ["gemini-fixture-flash"],
+  "webSearchModelIds": ["gemini-fixture-flash"],
+  "imageGenerationModelIds": ["gemini-fixture-image", "gemini-fixture-retired-image"]
+}

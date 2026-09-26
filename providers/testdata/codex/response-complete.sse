@@ -1,0 +1,11 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_fixture","status":"in_progress","output":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_fixture","name":"lookup","arguments":""}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"call_fixture","output_index":0,"delta":"{\"term\":\"protocol\"}"}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_fixture","object":"response","status":"completed","model":"codex-alpha-2026-09","output":[{"type":"reasoning","summary":[{"type":"summary_text","text":"fixture reasoning"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"fixture answer"}]},{"type":"function_call","call_id":"call_fixture","name":"lookup","arguments":"{\"term\":\"protocol\"}"}],"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}

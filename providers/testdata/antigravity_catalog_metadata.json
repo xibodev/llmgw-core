@@ -1,0 +1,35 @@
+{
+  "models": {
+    "gemini-3.1-flash-image": {
+      "displayName": "Image model"
+    },
+    "gemini-3.8-flash-tiered": {
+      "supportsImages": true,
+      "supportsThinking": true,
+      "supportsVideo": true,
+      "supportedMimeTypes": {
+        "audio/mpeg": true,
+        "image/png": true,
+        "video/mp4": true
+      }
+    },
+    "claude-sonnet-4-6": {
+      "displayName": "Reasoning model",
+      "supportsImages": true,
+      "supportsThinking": true,
+      "supportedMimeTypes": {
+        "image/png": true
+      }
+    },
+    "chat_20706": {},
+    "tab_flash_lite_preview": {}
+  },
+  "audioTranscriptionModelIds": [],
+  "imageGenerationModelIds": ["gemini-3.1-flash-image"],
+  "tabModelIds": ["chat_20706"],
+  "tieredModelIds": {
+    "flash": ["gemini-3.8-flash-tiered"],
+    "flashLite": [],
+    "pro": []
+  }
+}

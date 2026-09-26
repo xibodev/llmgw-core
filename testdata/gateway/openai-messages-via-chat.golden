@@ -1,0 +1,26 @@
+# Messages translated to a Chat-only model
+request: POST /v1/messages
+status: 200
+header Content-Type: application/json
+header X-Llmgw-Transport-Mode: translated
+upstream: POST /f/chat/completions
+upstream body: {"max_tokens":64,"messages":[{"content":"Say hello","role":"user"}],"model":"chat-model","stream":false}
+body:
+{
+  "content": [
+    {
+      "text": "Hello from chat",
+      "type": "text"
+    }
+  ],
+  "id": "chatcmpl_fixture",
+  "model": "chat-model",
+  "role": "assistant",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "type": "message",
+  "usage": {
+    "input_tokens": 3,
+    "output_tokens": 4
+  }
+}

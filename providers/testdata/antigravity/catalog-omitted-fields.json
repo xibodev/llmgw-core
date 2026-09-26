@@ -1,0 +1,15 @@
+{
+  "models": {
+    "fixture-bare": {},
+    "fixture-named": {
+      "displayName": "Fixture Named"
+    },
+    "fixture-unrostered-image": {
+      "displayName": "Fixture Unrostered Image",
+      "supportsImages": true
+    },
+    " ": {
+      "displayName": "Blank identity"
+    }
+  }
+}

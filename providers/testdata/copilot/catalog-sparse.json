@@ -1,0 +1,25 @@
+{
+  "data": [
+    {"id": "copilot-fixture-bare"},
+    {"name": "copilot-fixture-named"},
+    {"id": "   ", "name": "copilot-fixture-blank-id", "owned_by": "fixture-owner"},
+    {"id": "copilot-fixture-labelled", "display_name": "copilot-fixture-labelled", "name": "Fixture Labelled"},
+    {"id": "copilot-fixture-display", "display_name": "Fixture Display", "name": "Fixture Name", "vendor": "", "owned_by": "fixture-owner"},
+    {"id": "copilot-fixture-odd", "capabilities": "not-an-object", "supported_endpoints": [7, "/chat/completions", null]},
+    {
+      "id": "copilot-fixture-empty",
+      "supported_endpoints": [],
+      "capabilities": {
+        "supports": {"reasoning_effort": [], "vision": "yes"},
+        "limits": {"max_context_window_tokens": 0, "max_prompt_tokens": 8192.9}
+      }
+    },
+    {
+      "id": "copilot-fixture-operations",
+      "supported_endpoints": [
+        " /V1/Chat/Completions ", "ws:/responses", "/v1/embeddings", "/v1/images/generations",
+        "/v1/audio/transcriptions", "/v1/audio/speech", "/v1/videos/generations", "/v1/messages/count_tokens"
+      ]
+    }
+  ]
+}

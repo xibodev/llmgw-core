@@ -115,7 +115,9 @@ func (c *Client) Info(ctx context.Context) (InfoResponse, error) {
 	return info, nil
 }
 
-// ListModels returns provider's catalog for credential, which may be nil.
+// ListModels returns provider's catalog for credential, which may be nil,
+// as the daemon sent it. Provider.ListModels also lists a model that
+// reports nothing about what it serves with its provider's surfaces.
 func (c *Client) ListModels(ctx context.Context, provider string, credential *core.Credential) ([]core.ModelInfo, error) {
 	endpoint, err := c.providerURL(provider, "models")
 	if err != nil {

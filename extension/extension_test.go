@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -529,6 +530,215 @@ func TestProviderServesOnlyItsSurfaces(t *testing.T) {
 	response, err := provider.Invoke(context.Background(), core.Request{Surface: core.ModelSurfaceAudioSpeech, Model: "voice", Body: []byte("hi"), ContentType: "text/plain"})
 	if err != nil || string(response.Body) != "mp3" || response.ContentType != "audio/mpeg" {
 		t.Fatalf("speech = %q (%s), %v", response.Body, response.ContentType, err)
+	}
+}
+
+// catalogProvider is the provider "catalog" of a daemon whose models route
+// answers with rows once it has checked the route and the credential.
+func catalogProvider(t *testing.T, surfaces []core.ModelSurface, rows []core.ModelInfo) *extension.Provider {
+	t.Helper()
+	client, _ := daemon(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/extension/v1/catalog/models" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if token, kind := r.Header.Get(extension.HeaderCredentialToken), r.Header.Get(extension.HeaderCredentialType); token != "key-1" || kind != core.TokenTypeAPIKey {
+			t.Errorf("credential = %q (%s)", token, kind)
+		}
+		writeJSON(t, w, http.StatusOK, extension.ModelsResponse{Models: rows})
+	})
+	return extension.NewProvider(client, extension.ProviderInfo{ID: "catalog", Surfaces: surfaces})
+}
+
+func listModels(t *testing.T, provider *extension.Provider) []core.ModelInfo {
+	t.Helper()
+	models, err := provider.ListModels(context.Background(), &core.Credential{APIKey: "key-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return models
+}
+
+// everySurface is every surface core defines, in the order derivedSurfaces
+// reports them.
+func everySurface() []core.ModelSurface {
+	return []core.ModelSurface{
+		core.ModelSurfaceChatCompletions, core.ModelSurfaceResponses, core.ModelSurfaceMessages,
+		core.ModelSurfaceEmbeddings, core.ModelSurfaceAudioTranscriptions, core.ModelSurfaceAudioSpeech,
+		core.ModelSurfaceImages, core.ModelSurfaceVideos,
+	}
+}
+
+// derivedSurfaces are the surfaces core infers a row serves, in the order of
+// everySurface: each chat surface its inferred capabilities support, and
+// each other surface whose operation they support.
+func derivedSurfaces(row core.ModelInfo) []core.ModelSurface {
+	capabilities := core.InferCapabilities(row, time.Time{}, time.Time{})
+	operations := map[core.ModelSurface]core.ModelOperation{
+		core.ModelSurfaceEmbeddings:          core.ModelOperationEmbeddings,
+		core.ModelSurfaceAudioTranscriptions: core.ModelOperationAudioIn,
+		core.ModelSurfaceAudioSpeech:         core.ModelOperationAudioOut,
+		core.ModelSurfaceImages:              core.ModelOperationImage,
+		core.ModelSurfaceVideos:              core.ModelOperationVideo,
+	}
+	var surfaces []core.ModelSurface
+	for _, surface := range everySurface() {
+		support := capabilities.SurfaceCompatibility(surface)
+		if operation, ok := operations[surface]; ok {
+			support = capabilities.OperationCompatibility(operation)
+		}
+		if support.IsSupported() {
+			surfaces = append(surfaces, surface)
+		}
+	}
+	return surfaces
+}
+
+func TestSpeechProviderListsItsModelsAsSpeechModels(t *testing.T) {
+	provider := catalogProvider(t, []core.ModelSurface{core.ModelSurfaceAudioSpeech},
+		[]core.ModelInfo{{ID: "voice-1", Object: "model"}, {ID: "voice-2", Object: "model"}})
+	models := listModels(t, provider)
+	if len(models) != 2 {
+		t.Fatalf("models = %+v", models)
+	}
+	for _, model := range models {
+		if !slices.Equal(model.SupportedAPIs, []string{"/v1/audio/speech"}) {
+			t.Fatalf("%s SupportedAPIs = %q", model.ID, model.SupportedAPIs)
+		}
+		if got := derivedSurfaces(model); !slices.Equal(got, []core.ModelSurface{core.ModelSurfaceAudioSpeech}) {
+			t.Fatalf("%s derived surfaces = %v", model.ID, got)
+		}
+		inferred := core.InferCapabilities(model, time.Time{}, time.Time{})
+		if inferred.Operations.AudioOut != core.SupportSupported || inferred.Operations.Chat != core.SupportUnknown ||
+			inferred.Surfaces != (core.ModelSurfaceCapabilities{}) {
+			t.Fatalf("%s operations %+v, surfaces %+v", model.ID, inferred.Operations, inferred.Surfaces)
+		}
+		if interfaces := core.TransportInterfaces(provider, nil, model.ID, model.SupportedAPIs); len(interfaces) != 0 {
+			t.Fatalf("%s offers chat interfaces %+v", model.ID, interfaces)
+		}
+		if native, emulated, unknown := core.ListingSurfaces(provider, nil, core.TransportEvidence{Row: model}, time.Now()); native != nil || emulated != nil || unknown != nil {
+			t.Fatalf("%s lists chat surfaces: native %v, emulated %v, unknown %v", model.ID, native, emulated, unknown)
+		}
+	}
+
+	// Each row has its own paths, and the provider's surfaces stay its own.
+	models[0].SupportedAPIs[0] = "/v1/changed"
+	if models[1].SupportedAPIs[0] != "/v1/audio/speech" || listModels(t, provider)[0].SupportedAPIs[0] != "/v1/audio/speech" ||
+		!slices.Equal(provider.Info().Surfaces, []core.ModelSurface{core.ModelSurfaceAudioSpeech}) {
+		t.Fatal("changing one row's SupportedAPIs changed another row or the provider")
+	}
+}
+
+func TestChatProviderListsItsModelsWithChatCompletions(t *testing.T) {
+	provider := catalogProvider(t, []core.ModelSurface{core.ModelSurfaceChatCompletions}, []core.ModelInfo{{ID: "chat-1", Object: "model"}})
+	models := listModels(t, provider)
+	if len(models) != 1 || !slices.Equal(models[0].SupportedAPIs, []string{"/v1/chat/completions"}) {
+		t.Fatalf("models = %+v", models)
+	}
+	model := models[0]
+	if got := derivedSurfaces(model); !slices.Equal(got, []core.ModelSurface{core.ModelSurfaceChatCompletions}) {
+		t.Fatalf("derived surfaces = %v", got)
+	}
+	if surface := core.ParseSurfacePath(model.SupportedAPIs[0]); surface != core.ModelSurfaceChatCompletions {
+		t.Fatalf("ParseSurfacePath(%q) = %q", model.SupportedAPIs[0], surface)
+	}
+	if inferred := core.InferCapabilities(model, time.Time{}, time.Time{}); inferred.Operations.Chat != core.SupportSupported {
+		t.Fatalf("operations = %+v", inferred.Operations)
+	}
+	if interfaces := core.TransportInterfaces(provider, nil, model.ID, model.SupportedAPIs); len(interfaces) != 1 ||
+		interfaces[0].Surface != core.ModelSurfaceChatCompletions {
+		t.Fatalf("interfaces = %+v", interfaces)
+	}
+}
+
+// A row that says anything about what its model serves, even that it does
+// not serve something, is kept as the daemon sent it. Capabilities that name
+// no operation or surface, such as limits or features, say nothing about it.
+func TestModelsThatReportWhatTheyServeKeepIt(t *testing.T) {
+	contextTokens := int64(8192)
+	rows := []core.ModelInfo{
+		{ID: "own-apis", Object: "model", SupportedAPIs: []string{"/responses"}},
+		{ID: "unrecognized-apis", Object: "model", SupportedAPIs: []string{"/v1/rerank"}},
+		{ID: "typed", Object: "model", Capabilities: &core.ModelCapabilities{
+			SchemaVersion: core.ModelCapabilitiesSchemaVersion,
+			Operations:    core.ModelOperationCapabilities{AudioOut: core.SupportSupported},
+		}},
+		{ID: "legacy", Object: "model", LegacyCapabilities: map[string]any{"tts": true}},
+		{ID: "legacy-refusal", Object: "model", LegacyCapabilities: map[string]any{"chat": false}},
+		{ID: "silent", Object: "model"},
+		{ID: "features-only", Object: "model",
+			LegacyCapabilities: map[string]any{"vision": true, "context_window": float64(8192)},
+			Capabilities: &core.ModelCapabilities{
+				SchemaVersion: core.ModelCapabilitiesSchemaVersion,
+				Limits:        core.ModelCapabilityLimits{ContextTokens: &contextTokens},
+			}},
+	}
+	provider := catalogProvider(t, []core.ModelSurface{core.ModelSurfaceChatCompletions, core.ModelSurfaceAudioSpeech}, rows)
+	models := listModels(t, provider)
+	if len(models) != len(rows) {
+		t.Fatalf("models = %+v", models)
+	}
+	for index, model := range models {
+		want := rows[index]
+		if want.ID == "silent" || want.ID == "features-only" {
+			want.SupportedAPIs = []string{"/v1/chat/completions", "/v1/audio/speech"}
+		}
+		if !reflect.DeepEqual(model, want) {
+			t.Errorf("model %s = %+v\nwant %+v", want.ID, model, want)
+		}
+	}
+}
+
+// Core infers from a filled row exactly the provider's surfaces, those core
+// defines, and reads its chat surfaces in the provider's order.
+func TestCoreDerivesTheProviderSurfacesFromAFilledModel(t *testing.T) {
+	for name, surfaces := range map[string][]core.ModelSurface{
+		"speech":             {core.ModelSurfaceAudioSpeech},
+		"chat":               {core.ModelSurfaceChatCompletions},
+		"responses and chat": {core.ModelSurfaceResponses, core.ModelSurfaceChatCompletions},
+		"every surface":      everySurface(),
+		"listed twice":       {core.ModelSurfaceMessages, core.ModelSurfaceImages, core.ModelSurfaceMessages},
+		"undefined":          {"telepathy", core.ModelSurfaceEmbeddings},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := listModels(t, catalogProvider(t, surfaces, []core.ModelInfo{{ID: "model", Object: "model"}}))[0]
+			var want []core.ModelSurface
+			for _, surface := range everySurface() {
+				if slices.Contains(surfaces, surface) {
+					want = append(want, surface)
+				}
+			}
+			if got := derivedSurfaces(model); !slices.Equal(got, want) {
+				t.Fatalf("derived surfaces = %v from %q, want %v", got, model.SupportedAPIs, want)
+			}
+			var wantChat, gotChat []core.ModelSurface
+			for _, surface := range surfaces {
+				if core.ParseSurfacePath(core.SurfacePath(surface)) != "" && !slices.Contains(wantChat, surface) {
+					wantChat = append(wantChat, surface)
+				}
+			}
+			for _, path := range model.SupportedAPIs {
+				if surface := core.ParseSurfacePath(path); surface != "" {
+					gotChat = append(gotChat, surface)
+				}
+			}
+			if !slices.Equal(gotChat, wantChat) || len(model.SupportedAPIs) != len(want) {
+				t.Fatalf("SupportedAPIs = %q, chat surfaces %v, want %v", model.SupportedAPIs, gotChat, wantChat)
+			}
+		})
+	}
+}
+
+func TestProviderListModelsFailsAsTheClientDoes(t *testing.T) {
+	client, _ := daemon(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, http.StatusServiceUnavailable, extension.ErrorResponse{Error: extension.ErrorDetail{Message: "catalog unavailable", Code: 503}})
+	})
+	provider := extension.NewProvider(client, extension.ProviderInfo{ID: "catalog", Surfaces: []core.ModelSurface{core.ModelSurfaceAudioSpeech}})
+	models, err := provider.ListModels(context.Background(), nil)
+	_, clientErr := client.ListModels(context.Background(), "catalog", nil)
+	var providerError *core.ProviderError
+	if models != nil || !errors.As(err, &providerError) || clientErr == nil || err.Error() != clientErr.Error() ||
+		core.ClassifyError(err) != core.ClassifyError(clientErr) || !strings.Contains(err.Error(), "catalog unavailable") {
+		t.Fatalf("models = %+v, error = %v, the client's = %v", models, err, clientErr)
 	}
 }
 

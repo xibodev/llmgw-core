@@ -26,6 +26,20 @@
 // when present, holds the operation's losses. stream answers with the
 // surface's SSE records.
 //
+// # Models
+//
+// A models answer lists core.ModelInfo rows. A row may say what its model
+// serves in the fields a core catalog row uses: SupportedAPIs lists the
+// endpoint path of each surface the model serves, as core.SurfacePath gives
+// it, such as "/v1/audio/speech", and Capabilities or LegacyCapabilities
+// give the operations it supports. A daemon reports them for a model that
+// serves only some of its provider's surfaces, such as a speech model of a
+// provider that also serves chat. A row that reports none of them serves
+// every surface of its provider: Provider.ListModels lists it with the path
+// of each surface in ProviderInfo.Surfaces, and keeps a row that reports
+// what it serves as the daemon sent it. The fields are optional, so a daemon
+// that sends none of them still speaks version 1 of the protocol.
+//
 // # Credentials
 //
 // The daemon keeps no credentials. The product stores each one, sends it with

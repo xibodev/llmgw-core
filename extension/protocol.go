@@ -57,7 +57,9 @@ type ProviderInfo struct {
 	ID string `json:"id"`
 	// Name is the provider's display name.
 	Name string `json:"name"`
-	// Surfaces are the surfaces the provider serves natively.
+	// Surfaces are the surfaces the provider serves natively. Every model
+	// its catalog lists serves all of them, unless the model reports what
+	// it serves (see ModelsResponse).
 	Surfaces []core.ModelSurface `json:"surfaces"`
 	// HasOAuth reports the oauth routes, and HasRefresh the refresh route.
 	HasOAuth   bool `json:"has_oauth"`
@@ -90,7 +92,14 @@ type InfoResponse struct {
 	Providers []ProviderInfo `json:"providers"`
 }
 
-// ModelsResponse answers models.
+// ModelsResponse answers models. A model may report what it serves in the
+// fields a core catalog row uses: SupportedAPIs lists the endpoint path of
+// each surface it serves, as core.SurfacePath gives it, and Capabilities or
+// LegacyCapabilities give its operations. A daemon reports them when a
+// model serves only some of its provider's surfaces. The fields are
+// optional, so the protocol stays at version 1: Provider.ListModels lists a
+// model that reports none of them with the paths of every surface of its
+// provider.
 type ModelsResponse struct {
 	Models []core.ModelInfo `json:"models"`
 }

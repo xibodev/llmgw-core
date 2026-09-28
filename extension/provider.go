@@ -3,6 +3,7 @@ package extension
 import (
 	"context"
 	"slices"
+	"time"
 
 	core "github.com/xibodev/llmgw-core"
 )
@@ -54,9 +55,58 @@ func (p *Provider) Stream(ctx context.Context, request core.Request) (core.Strea
 	return p.client.Stream(ctx, p.info.ID, request)
 }
 
-// ListModels returns the provider's catalog for credential.
+// ListModels returns the provider's catalog for credential. A model that
+// reports nothing about what it serves, neither SupportedAPIs nor the
+// support of an operation or a surface in its Capabilities or
+// LegacyCapabilities, serves the provider's surfaces: its SupportedAPIs
+// become their paths, as core.SurfacePath gives them, so core infers those
+// surfaces for it wherever it reads a row. A surface core does not define
+// has no path and is left out. A model that reports what it serves is kept
+// as the daemon sent it.
 func (p *Provider) ListModels(ctx context.Context, credential *core.Credential) ([]core.ModelInfo, error) {
-	return p.client.ListModels(ctx, p.info.ID, credential)
+	models, err := p.client.ListModels(ctx, p.info.ID, credential)
+	if err != nil {
+		return nil, err
+	}
+	paths := surfacePaths(p.info.Surfaces)
+	if len(paths) == 0 {
+		return models, nil
+	}
+	for index := range models {
+		if !reportsWhatItServes(models[index]) {
+			// Each row gets its own copy, so changing one row changes no other.
+			models[index].SupportedAPIs = slices.Clone(paths)
+		}
+	}
+	return models, nil
+}
+
+// surfacePaths returns the path of each of surfaces that core defines, once
+// and in order.
+func surfacePaths(surfaces []core.ModelSurface) []string {
+	var paths []string
+	for _, surface := range surfaces {
+		if path := core.SurfacePath(surface); path != "" && !slices.Contains(paths, path) {
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
+// reportsWhatItServes reports whether model says anything about what it
+// serves: it lists SupportedAPIs, or its Capabilities, or those core infers
+// from its LegacyCapabilities, give the support of an operation or a
+// surface, whether supported or not.
+func reportsWhatItServes(model core.ModelInfo) bool {
+	return len(model.SupportedAPIs) > 0 || knowsService(model.Capabilities) ||
+		knowsService(core.InferCapabilities(model, time.Time{}, time.Time{}))
+}
+
+// knowsService reports whether capabilities give the support of any
+// operation or surface.
+func knowsService(capabilities *core.ModelCapabilities) bool {
+	return capabilities != nil && (capabilities.Operations != (core.ModelOperationCapabilities{}) ||
+		capabilities.Surfaces != (core.ModelSurfaceCapabilities{}))
 }
 
 func (p *Provider) serves(request core.Request) error {

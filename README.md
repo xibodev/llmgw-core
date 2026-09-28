@@ -253,6 +253,59 @@ translating through llm-translate:
 - Messages over Chat Completions, streaming included.
 - Chat Completions over Responses.
 - Responses over Chat Completions.
+- Chat Completions over Messages, streaming included.
+
+When a provider serves more than one surface a route could target, the
+first route in that order is used, so Chat Completions goes over Responses
+before Messages. `translation.Serves(surface, native...)` reports what an
+Adapter serves in front of a provider with those native surfaces, and
+`translation.ServesStream` whether it streams it; they agree with
+`Adapter.Surfaces` by construction. `translation.ServesChat(native...)`
+answers the question a chat product asks of a model's surfaces. A catalog
+row names its surfaces as paths in `SupportedAPIs`, which
+`core.ParseSurfacePath` reads:
+
+```go
+surfaces := make([]core.ModelSurface, 0, len(model.SupportedAPIs))
+for _, path := range model.SupportedAPIs {
+    surfaces = append(surfaces, core.ParseSurfacePath(path))
+}
+if translation.ServesChat(surfaces...) {
+    // offer the model for chat, through translation.Adapter
+}
+```
+
+Chat Completions over Messages converts:
+
+- **Messages.** System and developer messages become the system prompt;
+  tool calls and tool results become `tool_use` and `tool_result` blocks.
+- **Options.** `max_completion_tokens` or `max_tokens` becomes `max_tokens`,
+  8192 when neither is set, since Messages requires one. `temperature` is
+  clamped to Messages' range of 0 to 1, `stop` becomes `stop_sequences`,
+  `user` becomes `metadata.user_id`, and `top_p` and `top_k` pass through.
+- **Tools.** Function tools, and `tool_choice`: `auto`, `required` as `any`,
+  `none`, or one named function. `parallel_tool_calls: false` becomes
+  `disable_parallel_tool_use`.
+- **Losses.** A field that changes what the answer is or how it is shaped
+  is a material loss: `n` above 1, a `response_format` other than text,
+  `logprobs`, `logit_bias`, the penalties, audio output, `prediction`, the
+  legacy `functions`, and `web_search_options`. Any other dropped field,
+  such as `seed` or `store`, is advisory. A value that asks for nothing, such
+  as `n: 1` or a zero penalty, is no loss.
+- **Reasoning.** `reasoning_effort` is dropped with an advisory loss: a
+  Messages model that has no effort setting refuses one, and a thinking
+  turn has to be replayed with its signed thinking block, which a Chat
+  history cannot carry. Thinking blocks in an answer are dropped with an
+  advisory loss, as in the other directions.
+- **Answers.** Text, tool calls and the finish reason. Usage counts the
+  input read from and written to the cache in `prompt_tokens`, as Chat does,
+  and the part read from the cache in `cached_tokens`.
+- **Streams.** A stream sends its usage in a last chunk when the request sets
+  `stream_options.include_usage`, and reports the usage loss otherwise. A
+  Messages error event fails the stream with the error its type documents,
+  so an overload or a rate limit is transient; so does an upstream that ends
+  before `message_stop`. A failed stream sends no finish reason and no
+  `[DONE]`, so it never looks complete.
 
 `translation.ChatTranscriptionAdapter` is the explicit audio counterpart. It
 serves `audio_transcriptions` by sending multipart audio as an `input_audio`
@@ -452,8 +505,8 @@ provider, err := providers.NewAnthropic(providers.AnthropicConfig{
   the request's model and the operation's stream flag, the answer comes back
   as Anthropic sent it, and `core.PreservesWire` reports it, so a product
   labels it native. A stream is relayed byte for byte and fails
-  if it ends before `message_stop`. `translation.Adapter` has no route from
-  Chat Completions to Messages, so a Chat client needs another target.
+  if it ends before `message_stop`. `translation.Adapter` serves Chat
+  Completions over it, streaming included; see [Runtime](#runtime).
 - **Preamble.** The hook's text goes before the system prompt, as the
   gateway puts its preamble there. A body's `_llmgw_preamble`, which
   llm-translate also reads, supplies it when the hook returns none, and

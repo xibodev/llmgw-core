@@ -7,7 +7,6 @@ package translation
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"mime"
 	"slices"
@@ -22,7 +21,12 @@ import (
 //
 //   - Messages over a Chat Completions provider, streaming included;
 //   - Chat Completions over a Responses provider;
-//   - Responses over a Chat Completions provider.
+//   - Responses over a Chat Completions provider;
+//   - Chat Completions over a Messages provider, streaming included.
+//
+// When a provider serves more than one surface a route could target, the
+// first route in that order is used. Serves reports what an Adapter serves
+// for a set of native surfaces.
 //
 // Losses the provider itself reports are merged into the same report. Request
 // losses are checked before the provider is called, so a rejected translation
@@ -34,20 +38,59 @@ type Adapter struct {
 	Policy   core.LossPolicy
 }
 
-// route converts one client surface to one native surface and back.
+// route converts one client surface to one native surface and back. stream,
+// when set, renders the native surface's stream as the client surface's.
 type route struct {
 	from, target core.ModelSurface
 	request      func(model string, payload map[string]any, stream bool) (map[string]any, []core.Loss, error)
 	response     func(model string, response map[string]any) (map[string]any, []core.Loss)
-	streamable   bool
+	stream       func(upstream core.StreamIter, model string, payload map[string]any, losses []core.Loss) core.StreamIter
 }
 
 func routes() []route {
 	return []route{
-		{from: core.ModelSurfaceMessages, target: core.ModelSurfaceChatCompletions, request: messagesToChat, response: chatToMessagesResponse, streamable: true},
+		{from: core.ModelSurfaceMessages, target: core.ModelSurfaceChatCompletions, request: messagesToChat, response: chatToMessagesResponse, stream: func(upstream core.StreamIter, model string, _ map[string]any, losses []core.Loss) core.StreamIter {
+			return newMessagesStream(upstream, model, losses)
+		}},
 		{from: core.ModelSurfaceChatCompletions, target: core.ModelSurfaceResponses, request: chatToResponses, response: responsesToChatResponse},
 		{from: core.ModelSurfaceResponses, target: core.ModelSurfaceChatCompletions, request: responsesToChat, response: chatToResponsesResponse},
+		{from: core.ModelSurfaceChatCompletions, target: core.ModelSurfaceMessages, request: chatToMessages, response: messagesToChatResponse, stream: func(upstream core.StreamIter, model string, payload map[string]any, losses []core.Loss) core.StreamIter {
+			return newChatStream(upstream, model, includesUsage(payload), losses)
+		}},
 	}
+}
+
+// Serves reports whether an Adapter in front of a provider with the native
+// surfaces serves target: natively, or through a route to one of them. A
+// route serves Invoke; Stream also needs a route that streams, which
+// ServesStream reports. It agrees with Adapter.Surfaces by construction.
+func Serves(target core.ModelSurface, native ...core.ModelSurface) bool {
+	_, ok := routeFor(target, native, false)
+	return ok || slices.Contains(native, target)
+}
+
+// ServesStream reports whether an Adapter in front of a provider with the
+// native surfaces streams target: natively, or through a route that streams.
+func ServesStream(target core.ModelSurface, native ...core.ModelSurface) bool {
+	_, ok := routeFor(target, native, true)
+	return ok || slices.Contains(native, target)
+}
+
+// ServesChat reports whether an Adapter in front of a provider with the
+// native surfaces serves Chat Completions.
+func ServesChat(native ...core.ModelSurface) bool {
+	return Serves(core.ModelSurfaceChatCompletions, native...)
+}
+
+// routeFor returns the first route from target to one of the native
+// surfaces, one that streams when stream is set.
+func routeFor(target core.ModelSurface, native []core.ModelSurface, stream bool) (route, bool) {
+	for _, candidate := range routes() {
+		if candidate.from == target && slices.Contains(native, candidate.target) && (!stream || candidate.stream != nil) {
+			return candidate, true
+		}
+	}
+	return route{}, false
 }
 
 // NativeSurfaces reports the wrapped provider's native surfaces: translated
@@ -58,9 +101,10 @@ func (a Adapter) NativeSurfaces(model string) []core.ModelSurface {
 
 // Surfaces lists every surface the adapter serves for model, native first.
 func (a Adapter) Surfaces(model string) []core.ModelSurface {
-	surfaces := append([]core.ModelSurface(nil), a.Provider.NativeSurfaces(model)...)
+	native := a.Provider.NativeSurfaces(model)
+	surfaces := append([]core.ModelSurface(nil), native...)
 	for _, candidate := range routes() {
-		if !slices.Contains(surfaces, candidate.from) && core.ServesNatively(a.Provider, model, candidate.target) {
+		if !slices.Contains(surfaces, candidate.from) && Serves(candidate.from, native...) {
 			surfaces = append(surfaces, candidate.from)
 		}
 	}
@@ -77,36 +121,32 @@ func (a Adapter) ListModels(ctx context.Context, credential *core.Credential) ([
 // read the wrapped provider's declarations through the adapter.
 func (a Adapter) Unwrap() core.Provider { return a.Provider }
 
-func (a Adapter) route(model string, surface core.ModelSurface) (route, bool) {
-	for _, candidate := range routes() {
-		if candidate.from == surface && core.ServesNatively(a.Provider, model, candidate.target) {
-			return candidate, true
-		}
-	}
-	return route{}, false
+func (a Adapter) route(model string, surface core.ModelSurface, stream bool) (route, bool) {
+	return routeFor(surface, a.Provider.NativeSurfaces(model), stream)
 }
 
 // translateRequest converts a request to the route's native surface and
-// enforces the policy on the conversion's losses.
-func (a Adapter) translateRequest(r route, request core.Request, stream bool) (core.Request, []core.Loss, error) {
+// enforces the policy on the conversion's losses. It also returns the
+// client's payload, which a translated stream reads.
+func (a Adapter) translateRequest(r route, request core.Request, stream bool) (core.Request, map[string]any, []core.Loss, error) {
 	payload, err := jsonPayload(request)
 	if err != nil {
-		return core.Request{}, nil, err
+		return core.Request{}, nil, nil, err
 	}
 	translated, losses, err := r.request(request.Model, payload, stream)
 	if err != nil {
-		return core.Request{}, losses, &core.ProviderError{Message: "the request cannot be translated: " + err.Error(), Class: core.ProviderErrorInvalidRequest, Cause: err}
+		return core.Request{}, payload, losses, &core.ProviderError{Message: "the request cannot be translated: " + err.Error(), Class: core.ProviderErrorInvalidRequest, Cause: err}
 	}
 	if err := a.Policy.Check(losses); err != nil {
-		return core.Request{}, losses, err
+		return core.Request{}, payload, losses, err
 	}
 	body, err := json.Marshal(translated)
 	if err != nil {
-		return core.Request{}, losses, err
+		return core.Request{}, payload, losses, err
 	}
 	upstream := request
 	upstream.Surface, upstream.Body, upstream.ContentType = r.target, body, core.ContentTypeJSON
-	return upstream, losses, nil
+	return upstream, payload, losses, nil
 }
 
 // Invoke serves request natively when the provider can, and otherwise by
@@ -115,11 +155,11 @@ func (a Adapter) Invoke(ctx context.Context, request core.Request) (core.Respons
 	if core.ServesNatively(a.Provider, request.Model, request.Surface) {
 		return a.Provider.Invoke(ctx, request)
 	}
-	r, ok := a.route(request.Model, request.Surface)
+	r, ok := a.route(request.Model, request.Surface, false)
 	if !ok {
 		return core.Response{}, &core.SurfaceError{Surface: request.Surface, Model: request.Model}
 	}
-	upstream, losses, err := a.translateRequest(r, request, false)
+	upstream, _, losses, err := a.translateRequest(r, request, false)
 	if err != nil {
 		return core.Response{Losses: losses}, err
 	}
@@ -154,11 +194,11 @@ func (a Adapter) Stream(ctx context.Context, request core.Request) (core.StreamI
 	if core.ServesNatively(a.Provider, request.Model, request.Surface) {
 		return a.Provider.Stream(ctx, request)
 	}
-	r, ok := a.route(request.Model, request.Surface)
-	if !ok || !r.streamable {
+	r, ok := a.route(request.Model, request.Surface, true)
+	if !ok {
 		return nil, &core.SurfaceError{Surface: request.Surface, Model: request.Model}
 	}
-	upstream, losses, err := a.translateRequest(r, request, true)
+	upstream, payload, losses, err := a.translateRequest(r, request, true)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +207,7 @@ func (a Adapter) Stream(ctx context.Context, request core.Request) (core.StreamI
 		return nil, err
 	}
 	losses = append(losses, core.StreamLosses(stream)...)
-	return newMessagesStream(stream, request.Model, losses), nil
+	return r.stream(stream, request.Model, payload, losses), nil
 }
 
 func jsonPayload(request core.Request) (map[string]any, error) {
@@ -208,14 +248,9 @@ func chatToMessagesResponse(model string, response map[string]any) (map[string]a
 }
 
 func chatToResponses(model string, payload map[string]any, stream bool) (map[string]any, []core.Loss, error) {
-	rawMessages, _ := payload["messages"].([]any)
-	messages := make([]map[string]any, 0, len(rawMessages))
-	for _, raw := range rawMessages {
-		message, ok := raw.(map[string]any)
-		if !ok {
-			return nil, nil, errors.New("every Chat message must be an object")
-		}
-		messages = append(messages, message)
+	messages, err := chatMessages(payload)
+	if err != nil {
+		return nil, nil, err
 	}
 	options := make(map[string]any, len(payload))
 	for key, value := range payload {

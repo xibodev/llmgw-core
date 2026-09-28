@@ -41,6 +41,25 @@ func TestAdmitAnonymousModelAppliesReviewedRules(t *testing.T) {
 			providers.AnonymousAdmission{Free: true, ContextWindow: 8192}},
 		{"ovh model without limits", "ovh_ai_endpoints", map[string]any{"context_length": 8192.0, "pricing": free},
 			providers.AnonymousAdmission{ContextWindow: 8192}},
+		{"ovh priced chat model", "ovh_ai_endpoints", map[string]any{"id": "Qwen3.8-27B", "context_length": 262144.0, "max_completion_tokens": 262144.0,
+			"pricing": map[string]any{"prompt": "0.00000047", "completion": "0.00000319"}},
+			providers.AnonymousAdmission{Free: true, ContextWindow: 262144}},
+		{"ovh chat model named by name", "ovh_ai_endpoints", map[string]any{"name": "gpt-oss-20b", "context_length": 131072.0, "max_completion_tokens": 131072.0},
+			providers.AnonymousAdmission{Free: true, ContextWindow: 131072}},
+		{"ovh safety classifier", "ovh_ai_endpoints", map[string]any{"id": "Qwen3Guard-Gen-8B", "context_length": 32768.0, "max_completion_tokens": 16384.0, "pricing": free},
+			providers.AnonymousAdmission{ContextWindow: 32768}},
+		{"ovh classifier named by name", "ovh_ai_endpoints", map[string]any{"name": "Llama-GUARD-4-12B", "context_length": 8192.0, "max_completion_tokens": 512.0},
+			providers.AnonymousAdmission{ContextWindow: 8192}},
+		{"ovh moderation model", "ovh_ai_endpoints", map[string]any{"id": "Text-Moderation-Latest", "context_length": 8192.0, "max_completion_tokens": 64.0},
+			providers.AnonymousAdmission{ContextWindow: 8192}},
+		{"ovh embedding model", "ovh_ai_endpoints", map[string]any{"id": "Qwen3-EMBEDDING-8B", "context_length": 32768.0, "max_completion_tokens": 1.0},
+			providers.AnonymousAdmission{ContextWindow: 32768}},
+		{"ovh bge model", "ovh_ai_endpoints", map[string]any{"id": "BGE-m3", "context_length": 8192.0, "max_completion_tokens": 1.0},
+			providers.AnonymousAdmission{ContextWindow: 8192}},
+		{"ovh reranker", "ovh_ai_endpoints", map[string]any{"id": "jina-ReRanker-v2", "context_length": 8192.0, "max_completion_tokens": 1.0},
+			providers.AnonymousAdmission{ContextWindow: 8192}},
+		{"ovh speech model", "ovh_ai_endpoints", map[string]any{"id": "whisper-large-v3", "context_length": 0.0, "max_completion_tokens": 0.0, "pricing": free},
+			providers.AnonymousAdmission{}},
 		{"pollinations anonymous text model", "pollinations", map[string]any{"tier": "anonymous", "output_modalities": text, "reasoning": true, "tools": true},
 			providers.AnonymousAdmission{Free: true, Reasoning: true, ToolCalls: true}},
 		{"pollinations seed tier", "pollinations", map[string]any{"tier": "seed", "output_modalities": text},
@@ -61,16 +80,23 @@ func TestAdmitAnonymousModelAppliesReviewedRules(t *testing.T) {
 func TestAdmitAnonymousModelRejectsMalformedPrices(t *testing.T) {
 	t.Parallel()
 	row := func(price any) map[string]any {
-		return map[string]any{"context_length": 8192.0, "max_completion_tokens": 4096.0, "pricing": map[string]any{"prompt": price, "completion": price}}
+		return map[string]any{"isFree": true, "pricing": map[string]any{"prompt": price, "completion": price},
+			"architecture": map[string]any{"output_modalities": []any{"text"}}}
 	}
 	for _, price := range []any{"0", "0.000", 0.0} {
-		if !providers.AdmitAnonymousModel("ovh_ai_endpoints", row(price)).Free {
+		if !providers.AdmitAnonymousModel("kilo_code", row(price)).Free {
 			t.Fatalf("valid zero price %#v rejected", price)
 		}
 	}
 	for _, price := range []any{"", ".", "...", "0..0", "1", 1.0, nil, true} {
-		if providers.AdmitAnonymousModel("ovh_ai_endpoints", row(price)).Free {
+		if providers.AdmitAnonymousModel("kilo_code", row(price)).Free {
 			t.Fatalf("malformed or nonzero price %#v admitted", price)
+		}
+		// OVH's pricing is the paid tier's, which anonymous access never
+		// reads: its limits decide.
+		ovh := map[string]any{"id": "chat-fixture", "context_length": 8192.0, "max_completion_tokens": 4096.0, "pricing": row(price)["pricing"]}
+		if !providers.AdmitAnonymousModel("ovh_ai_endpoints", ovh).Free {
+			t.Fatalf("an OVH chat model priced %#v was rejected", price)
 		}
 	}
 }

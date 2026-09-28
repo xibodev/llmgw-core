@@ -136,11 +136,19 @@ func AdmitAnonymousModel(registryID string, row map[string]any) AnonymousAdmissi
 			ContextWindow: rowInt(row["context_length"]),
 		}
 	case "ovh_ai_endpoints":
-		pricing, _ := row["pricing"].(map[string]any)
+		// OVHcloud AI Endpoints serves its chat models without a key,
+		// rate limited per IP, whatever their catalog price: pricing is
+		// the paid tier's, so it is not read. A row is admitted when it can
+		// chat, that is when it states both a context length and a
+		// completion limit, unless its id names a model that states both
+		// but is no chat assistant: a safety classifier or moderation
+		// model, an embedding model or a reranker (see ovhNonChatModel).
+		// The catalog's speech-to-text, text-to-speech and image rows
+		// state neither limit.
+		window := rowInt(row["context_length"])
 		return AnonymousAdmission{
-			Free: rowInt(row["context_length"]) > 0 && rowInt(row["max_completion_tokens"]) > 0 &&
-				zeroPrice(pricing["prompt"]) && zeroPrice(pricing["completion"]),
-			ContextWindow: rowInt(row["context_length"]),
+			Free:          window > 0 && rowInt(row["max_completion_tokens"]) > 0 && !ovhNonChatModel(anonymousRowID(row)),
+			ContextWindow: window,
 		}
 	case "pollinations":
 		tier, _ := row["tier"].(string)
@@ -152,6 +160,27 @@ func AdmitAnonymousModel(registryID string, row map[string]any) AnonymousAdmissi
 		}
 	}
 	return AnonymousAdmission{}
+}
+
+// ovhNonChatModel reports an OVHcloud AI Endpoints model id that names no
+// chat assistant, whatever limits its row states: one that contains
+// "guard", such as the Qwen3Guard safety classifiers, "moderation",
+// "embedding" or "rerank", or that starts with "bge-", the BGE embedding
+// and reranking family. Matching ignores case.
+func ovhNonChatModel(id string) bool {
+	id = strings.ToLower(strings.TrimSpace(id))
+	return strings.HasPrefix(id, "bge-") || strings.Contains(id, "guard") || strings.Contains(id, "moderation") ||
+		strings.Contains(id, "embedding") || strings.Contains(id, "rerank")
+}
+
+// anonymousRowID is the model id of a raw catalog row: its id, or else its
+// name.
+func anonymousRowID(row map[string]any) string {
+	id, _ := row["id"].(string)
+	if id == "" {
+		id, _ = row["name"].(string)
+	}
+	return id
 }
 
 // DiscoverAnonymousModels queries an anonymous provider's catalog and returns
@@ -198,10 +227,7 @@ func DiscoverAnonymousModels(ctx context.Context, profile AnonymousProviderProfi
 func admittedAnonymousModels(rows []map[string]any, profile AnonymousProviderProfile) []core.ModelInfo {
 	out := []core.ModelInfo{}
 	for _, row := range rows {
-		id, _ := row["id"].(string)
-		if id == "" {
-			id, _ = row["name"].(string)
-		}
+		id := anonymousRowID(row)
 		if strings.TrimSpace(id) == "" || !AdmitAnonymousModel(profile.RegistryID, row).Free {
 			continue
 		}

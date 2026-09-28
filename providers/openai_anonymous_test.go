@@ -15,20 +15,28 @@ import (
 // Ported from the gateway's TestAnonymousCatalogProfilesFilterClaimedModels:
 // without a key, each anonymous entry lists only the models its reviewed
 // rules admit, free and serving Chat Completions; with a key, every row.
+// OVH admits a chat model whatever its paid price, and refuses a
+// classifier that states chat limits.
 func TestOpenAICompatibleAnonymousCatalogsAdmitFreeModels(t *testing.T) {
 	t.Parallel()
-	for registry, rows := range map[string]string{
-		"kilo_code": `{"id":"free","isFree":true,"context_length":8192,"pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]}},` +
+	for registry, test := range map[string]struct {
+		rows string
+		ids  []string
+	}{
+		"kilo_code": {`{"id":"free","isFree":true,"context_length":8192,"pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]}},` +
 			`{"id":"paid","isFree":false,"pricing":{"prompt":"1","completion":"1"},"architecture":{"output_modalities":["text"]}},` +
 			`{"id":"media","isFree":true,"pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["image"]}}`,
-		"llm7": `{"id":"free","tier":"turbo","context_length":8192,"usage_based_only":false,"model_type":"chat","schema_endpoints":["openai"]},` +
+			[]string{"free", "paid", "media"}},
+		"llm7": {`{"id":"free","tier":"turbo","context_length":8192,"usage_based_only":false,"model_type":"chat","schema_endpoints":["openai"]},` +
 			`{"id":"paid","tier":"pro","usage_based_only":true,"model_type":"chat","schema_endpoints":["openai"]},` +
 			`{"id":"media","tier":"turbo","usage_based_only":false,"model_type":"image","schema_endpoints":["openai"]}`,
-		"ovh_ai_endpoints": `{"id":"free","context_length":8192,"max_completion_tokens":128,"pricing":{"prompt":"0","completion":"0"}},` +
-			`{"id":"paid","context_length":1024,"max_completion_tokens":128,"pricing":{"prompt":"1","completion":"1"}},` +
+			[]string{"free", "paid", "media"}},
+		"ovh_ai_endpoints": {`{"id":"free","context_length":8192,"max_completion_tokens":128,"pricing":{"prompt":"0.00000047","completion":"0.00000319"}},` +
+			`{"id":"fixture-guard","context_length":1024,"max_completion_tokens":128,"pricing":{"prompt":"0","completion":"0"}},` +
 			`{"id":"media","context_length":0,"max_completion_tokens":0,"pricing":{"prompt":"0","completion":"0"}}`,
+			[]string{"free", "fixture-guard", "media"}},
 	} {
-		provider, backend := openAICatalogProvider(t, http.StatusOK, `{"data":[`+rows+`]}`, func(config *OpenAICompatibleConfig) { config.RegistryID = registry })
+		provider, backend := openAICatalogProvider(t, http.StatusOK, `{"data":[`+test.rows+`]}`, func(config *OpenAICompatibleConfig) { config.RegistryID = registry })
 		for _, credential := range []*core.Credential{nil, {APIKey: "free"}, {APIKey: "public"}} {
 			models, err := provider.ListModels(context.Background(), credential)
 			if err != nil || len(models) != 1 {
@@ -42,7 +50,7 @@ func TestOpenAICompatibleAnonymousCatalogsAdmitFreeModels(t *testing.T) {
 			}
 		}
 		models, err := provider.ListModels(context.Background(), &core.Credential{APIKey: "fixture-key"})
-		if err != nil || !slices.Equal(modelIDsOf(models), []string{"free", "paid", "media"}) || models[0].Free || models[0].SupportedAPIs != nil {
+		if err != nil || !slices.Equal(modelIDsOf(models), test.ids) || models[0].Free || models[0].SupportedAPIs != nil {
 			t.Fatalf("%s keyed: models = %+v, err = %v", registry, models, err)
 		}
 		calls := backend.take()

@@ -100,7 +100,11 @@ Anonymous providers use one mechanism:
   automation.
 - `AdmitAnonymousModel` applies each provider's reviewed free-model rules to a
   raw catalog row. It fails closed: unknown providers are never admitted, and
-  OpenCode Zen is admitted only from its verified metadata.
+  OpenCode Zen is admitted only from its verified metadata. OVH AI Endpoints
+  serves its chat models without a key, rate limited, whatever the paid price
+  its catalog lists, so it admits every row that states a context length and a
+  completion limit, except the ids of classifier, moderation, embedding and
+  reranker models.
 - `SelectVerificationModel` picks the model to probe.
 - `DiscoverAnonymousModels` combines them.
 

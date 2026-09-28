@@ -32,11 +32,7 @@ func admitAnonymousRows(registryID string, models []core.ModelInfo, items []any)
 	raw := make(map[string]map[string]any, len(items))
 	for _, item := range items {
 		row, _ := item.(map[string]any)
-		id, _ := row["id"].(string)
-		if id == "" {
-			id, _ = row["name"].(string)
-		}
-		raw[id] = row
+		raw[anonymousRowID(row)] = row
 	}
 	admitted := make([]core.ModelInfo, 0, len(models))
 	for _, model := range models {

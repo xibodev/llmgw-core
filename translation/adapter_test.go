@@ -249,8 +249,8 @@ func TestUnsupportedTranslationsAreTypedErrors(t *testing.T) {
 	if _, err := chatOnly.Invoke(context.Background(), jsonRequest(core.ModelSurfaceEmbeddings, `{"input":"x"}`)); !errors.As(err, &surfaceErr) {
 		t.Fatalf("embeddings over chat: err=%v", err)
 	}
-	if _, err := messagesOnly.Invoke(context.Background(), jsonRequest(core.ModelSurfaceChatCompletions, `{"messages":[]}`)); !errors.As(err, &surfaceErr) {
-		t.Fatalf("chat over messages: err=%v", err)
+	if _, err := messagesOnly.Invoke(context.Background(), jsonRequest(core.ModelSurfaceEmbeddings, `{"input":"x"}`)); !errors.As(err, &surfaceErr) {
+		t.Fatalf("embeddings over messages: err=%v", err)
 	}
 	if _, err := responsesOnly.Stream(context.Background(), jsonRequest(core.ModelSurfaceChatCompletions, `{"messages":[]}`)); !errors.As(err, &surfaceErr) {
 		t.Fatalf("a streamed chat over responses: err=%v", err)
@@ -274,6 +274,10 @@ func TestSurfacesListNativeThenTranslated(t *testing.T) {
 	responses := translation.Adapter{Provider: &fakeProvider{native: core.ModelSurfaceResponses}}
 	if got := responses.Surfaces("m"); !slices.Equal(got, []core.ModelSurface{core.ModelSurfaceResponses, core.ModelSurfaceChatCompletions}) {
 		t.Fatalf("responses surfaces=%v", got)
+	}
+	messages := translation.Adapter{Provider: &fakeProvider{native: core.ModelSurfaceMessages}}
+	if got := messages.Surfaces("m"); !slices.Equal(got, []core.ModelSurface{core.ModelSurfaceMessages, core.ModelSurfaceChatCompletions}) {
+		t.Fatalf("messages surfaces=%v", got)
 	}
 }
 

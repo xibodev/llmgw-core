@@ -296,6 +296,8 @@ The gateway's transport-mode decisions, as pure helpers over `PlanTransport`:
 - `ParseSurfacePath`, `ParseTransportRequirement`, `ListingSurfaces` and
   `ResponseTransportMode` port the path and header parsing, the model list's
   native and emulated surfaces, and the response label.
+- `SurfacePath` gives the path that names a surface in `SupportedAPIs`, such
+  as `/v1/audio/speech`, which core reads back as that surface.
 
 `Runtime.Transparent` sends the body as is, once, only when a transparent plan
 over the caller's stored catalog confirms it, and refuses a stream after that.
@@ -604,6 +606,11 @@ coordinator, err := tokenstore.NewCoordinator(store, client.RefreshFunc("example
   under its own lease, as `tokenstore.Coordinator` does.
 - **Sign-in.** `Client.OAuthDriver` is a device and code driver, so
   `oauthflow.Service` runs a daemon provider's sign-in like any other.
+- **Catalog.** A daemon may report what each model serves in its
+  `SupportedAPIs` and capabilities, as a core catalog row does. A model it
+  says nothing about serves every surface of its provider:
+  `Provider.ListModels` lists it with their paths, as `core.SurfacePath`
+  gives them, so core infers those surfaces for it.
 - **Errors** are `*core.ProviderError`, classified from the daemon's status
   as core classifies any upstream failure. A refused refresh is an
   `*extension.RefreshError`, terminal when the provider rejected the grant.

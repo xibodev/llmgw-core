@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -223,4 +224,55 @@ func TestAdaptModelCapabilitiesReadsEverySurface(t *testing.T) {
 		}) || capabilities.Inputs.Text != core.SupportSupported || capabilities.Freshness != (core.ModelCapabilityFreshness{}) {
 		t.Fatalf("capabilities = %+v", capabilities)
 	}
+}
+
+// Core reads each surface's path back as that surface and nothing else: a
+// chat surface through ParseSurfacePath and the inferred surfaces, and any
+// surface through the operation AdaptModelCapabilities infers.
+func TestSurfacePathIsReadBackAsItsSurface(t *testing.T) {
+	operations := []core.ModelOperation{
+		core.ModelOperationChat, core.ModelOperationEmbeddings, core.ModelOperationImage, core.ModelOperationAudioIn,
+		core.ModelOperationAudioOut, core.ModelOperationVideo, core.ModelOperationTokenCount,
+	}
+	chatSurfaces := []core.ModelSurface{core.ModelSurfaceChatCompletions, core.ModelSurfaceResponses, core.ModelSurfaceMessages}
+	for surface, operation := range map[core.ModelSurface]core.ModelOperation{
+		core.ModelSurfaceChatCompletions:     core.ModelOperationChat,
+		core.ModelSurfaceResponses:           core.ModelOperationChat,
+		core.ModelSurfaceMessages:            core.ModelOperationChat,
+		core.ModelSurfaceEmbeddings:          core.ModelOperationEmbeddings,
+		core.ModelSurfaceAudioTranscriptions: core.ModelOperationAudioIn,
+		core.ModelSurfaceAudioSpeech:         core.ModelOperationAudioOut,
+		core.ModelSurfaceImages:              core.ModelOperationImage,
+		core.ModelSurfaceVideos:              core.ModelOperationVideo,
+	} {
+		path := core.SurfacePath(surface)
+		if !strings.HasPrefix(path, "/v1/") {
+			t.Fatalf("%s path = %q", surface, path)
+		}
+		chat := slices.Contains(chatSurfaces, surface)
+		if parsed := core.ParseSurfacePath(path); (chat && parsed != surface) || (!chat && parsed != "") {
+			t.Errorf("ParseSurfacePath(%q) = %q", path, parsed)
+		}
+		capabilities := core.AdaptModelCapabilities(nil, []string{path}, time.Time{}, time.Time{})
+		for _, candidate := range operations {
+			if got, want := capabilities.OperationCompatibility(candidate), supportedIf(candidate == operation); got != want {
+				t.Errorf("%q: operation %s = %s, want %s", path, candidate, got, want)
+			}
+		}
+		for _, candidate := range chatSurfaces {
+			if got, want := capabilities.SurfaceCompatibility(candidate), supportedIf(candidate == surface); got != want {
+				t.Errorf("%q: surface %s = %s, want %s", path, candidate, got, want)
+			}
+		}
+	}
+	if path := core.SurfacePath("telepathy"); path != "" {
+		t.Fatalf("an undefined surface has the path %q", path)
+	}
+}
+
+func supportedIf(supported bool) core.Support {
+	if supported {
+		return core.SupportSupported
+	}
+	return core.SupportUnknown
 }

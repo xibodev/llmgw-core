@@ -95,6 +95,35 @@ func ParseSurfacePath(path string) ModelSurface {
 	return ""
 }
 
+// SurfacePath returns the endpoint path that names surface in a catalog
+// row's SupportedAPIs, with the /v1 prefix: "/v1/chat/completions" for Chat
+// Completions or "/v1/audio/speech" for speech. Core reads each path back
+// as its surface: ParseSurfacePath and AdaptModelCapabilities recognize a
+// chat surface's path, and AdaptModelCapabilities infers the operation of
+// any other. A surface this version does not define has no path:
+// SurfacePath returns the empty string.
+func SurfacePath(surface ModelSurface) string {
+	switch surface {
+	case ModelSurfaceChatCompletions:
+		return "/v1/chat/completions"
+	case ModelSurfaceResponses:
+		return "/v1/responses"
+	case ModelSurfaceMessages:
+		return "/v1/messages"
+	case ModelSurfaceEmbeddings:
+		return "/v1/embeddings"
+	case ModelSurfaceAudioTranscriptions:
+		return "/v1/audio/transcriptions"
+	case ModelSurfaceAudioSpeech:
+		return "/v1/audio/speech"
+	case ModelSurfaceImages:
+		return "/v1/images/generations"
+	case ModelSurfaceVideos:
+		return "/v1/videos/generations"
+	}
+	return ""
+}
+
 // ErrInvalidTransportRequirement reports a requested transport other than
 // transparent.
 var ErrInvalidTransportRequirement = errors.New("core: a requested transport must be transparent when present")

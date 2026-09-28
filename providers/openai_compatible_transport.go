@@ -130,6 +130,12 @@ func (p *OpenAICompatible) post(ctx context.Context, path string, header http.He
 	if err != nil {
 		return nil, openAIInvalid("the "+p.label+" request could not be encoded", err)
 	}
+	return p.send(ctx, path, header, body)
+}
+
+// send sends body to path byte for byte and returns the response, open
+// whatever its status.
+func (p *OpenAICompatible) send(ctx context.Context, path string, header http.Header, body []byte) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, core.NewConfigurationError("the "+p.label+" request could not be created", err)

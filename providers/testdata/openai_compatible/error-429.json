@@ -1,0 +1,15 @@
+{
+  "response": {
+    "status": 429,
+    "content_type": "application/json",
+    "retry_after": "20",
+    "body": {
+      "error": {
+        "message": "Rate limit reached for fixture-org on requests per min (RPM): Limit 3, Used 3, Requested 1. Please try again in 20s.",
+        "type": "requests",
+        "param": null,
+        "code": "rate_limit_exceeded"
+      }
+    }
+  }
+}

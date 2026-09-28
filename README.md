@@ -254,7 +254,10 @@ translating through llm-translate:
 serves `audio_transcriptions` by sending multipart audio as an `input_audio`
 Chat Completions part and normalizes the answer to `{"text": ...}`. Its
 `Enabled(model)` callback is mandatory: products opt in a provider or exact
-model rows, and the adapter never guesses capability from a model id.
+model rows, and the adapter never guesses capability from a model id. An
+opted-in model transcribes through Chat even when the provider lists
+`audio_transcriptions` natively, as `providers.OpenAICompatible` does for
+every model; the adapter reports the surface as translated for it.
 
 ### Catalogs
 
@@ -373,6 +376,18 @@ return translation.Adapter{Provider: provider}, nil // Messages over Chat
   through `core.WirePreserver`, so a product labels them native. The
   Adapter serves Responses over Chat for the other models, but does not
   stream it.
+- **Audio.** `audio_transcriptions` and `audio_speech` are native for every
+  model, and declared through `core.WirePreserver` too. A transcription's
+  multipart upload is forwarded byte for byte, with its own `Content-Type`
+  and boundary, to `/audio/transcriptions`, so the upload's `model` field
+  names the model. Speech is the request's JSON with the request's model,
+  sent to `/audio/speech`. The answer comes back as sent with the
+  upstream's content type: JSON, text, SRT or WebVTT as the transcription's
+  `response_format` asks, and audio for speech, within the 64 MiB bound on
+  any answer. Credentials, headers and refusals are the Chat surfaces', and
+  keyless access works as it does for Chat. Neither surface streams: a
+  stream is refused with an `unsupported` `*core.ProviderError` that
+  permits failover.
 - **Requests.** Chat carries the fields the gateway's transport forwards,
   and drops the others as advisory losses unless `ForwardAllFields` is
   set. Responses is forwarded as sent, with the request's model and
@@ -389,7 +404,8 @@ return translation.Adapter{Provider: provider}, nil // Messages over Chat
 - **Bedrock.** `NewBedrock(region, baseURL, config)` sends a Bedrock API
   key as a bearer to the base URL, or to the region's bedrock-runtime
   endpoint, us-east-1 by default. Nothing is signed, and a malformed
-  region is refused.
+  region is refused. Bedrock has no audio API, so it serves neither audio
+  surface.
 - **Errors** are `*core.ProviderError`, classified by the gateway's status
   set with `Retry-After`. A native Responses 404 or 405 is a
   `*core.SurfaceError`, and a catalog failure's `*providers.CatalogError`

@@ -1,0 +1,27 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/audio/transcriptions",
+    "content_type": "multipart/form-data; boundary=\"fixture-boundary:7MA4YWxkTrZu0gW\"",
+    "body_base64": "LS1maXh0dXJlLWJvdW5kYXJ5OjdNQTRZV3hrVHJadTBnVw0KQ29udGVudC1EaXNwb3NpdGlvbjogZm9ybS1kYXRhOyBuYW1lPSJmaWxlIjsgZmlsZW5hbWU9InNhbXBsZS53YXYiDQpDb250ZW50LVR5cGU6IGF1ZGlvL3dhdg0KDQpSSUZGKAAAAFdBVkVmbXQgEAAAAAEAAQCAPgAAAH0AAAIAEABkYXRhBAAAAACA/38NCi0tZml4dHVyZS1ib3VuZGFyeTo3TUE0WVd4a1RyWnUwZ1cNCkNvbnRlbnQtRGlzcG9zaXRpb246IGZvcm0tZGF0YTsgbmFtZT0ibW9kZWwiDQoNCndoaXNwZXItMQ0KLS1maXh0dXJlLWJvdW5kYXJ5OjdNQTRZV3hrVHJadTBnVw0KQ29udGVudC1EaXNwb3NpdGlvbjogZm9ybS1kYXRhOyBuYW1lPSJsYW5ndWFnZSINCg0KZW4NCi0tZml4dHVyZS1ib3VuZGFyeTo3TUE0WVd4a1RyWnUwZ1cNCkNvbnRlbnQtRGlzcG9zaXRpb246IGZvcm0tZGF0YTsgbmFtZT0icmVzcG9uc2VfZm9ybWF0Ig0KDQpqc29uDQotLWZpeHR1cmUtYm91bmRhcnk6N01BNFlXeGtUclp1MGdXLS0NCg==",
+    "model": "whisper-1",
+    "file_name": "sample.wav",
+    "file_base64": "UklGRigAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQQAAAAAgP9/",
+    "fields": {
+      "language": "en",
+      "model": "whisper-1",
+      "response_format": "json"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json",
+    "body": {
+      "text": "Hello from the fixture.",
+      "usage": {
+        "type": "duration",
+        "seconds": 1
+      }
+    }
+  }
+}

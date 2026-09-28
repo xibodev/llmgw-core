@@ -6,11 +6,17 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 
 	core "github.com/xibodev/llmgw-core"
+	"github.com/xibodev/llmgw-core/providers"
 	"github.com/xibodev/llmgw-core/translation"
 )
 
@@ -133,5 +139,73 @@ func TestChatTranscriptionResponseShapeIsOpenAICompatible(t *testing.T) {
 	var body map[string]any
 	if json.Unmarshal(response.Body, &body) != nil || body["text"] != "hello" || len(body) != 1 {
 		t.Fatalf("response=%s", response.Body)
+	}
+}
+
+// providers.OpenAICompatible lists audio_transcriptions natively for every
+// model. The opt-in still wins for the models it names: they transcribe
+// through Chat, and their transcription reads as translated. Every other
+// model's upload reaches the audio endpoint unchanged.
+func TestChatTranscriptionOptInWinsOverANativeTranscription(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		calls = append(calls, r.URL.Path+" "+string(body))
+		mu.Unlock()
+		w.Header().Set("Content-Type", core.ContentTypeJSON)
+		if r.URL.Path == "/v1/chat/completions" {
+			_, _ = io.WriteString(w, chatCompletion)
+			return
+		}
+		_, _ = io.WriteString(w, `{"text":"native"}`)
+	}))
+	defer server.Close()
+	provider, err := providers.NewOpenAICompatible(providers.OpenAICompatibleConfig{BaseURL: server.URL + "/v1", Client: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := translation.ChatTranscriptionAdapter{Provider: provider, Enabled: func(model string) bool { return model == "gpt-audio" }}
+	transcriptions := core.ModelSurfaceAudioTranscriptions
+	if slices.Contains(adapter.NativeSurfaces("gpt-audio"), transcriptions) || !slices.Contains(adapter.Surfaces("gpt-audio"), transcriptions) ||
+		!slices.Contains(adapter.NativeSurfaces("gpt-audio"), core.ModelSurfaceAudioSpeech) ||
+		!slices.Contains(adapter.NativeSurfaces("whisper-1"), transcriptions) || !slices.Contains(provider.NativeSurfaces("gpt-audio"), transcriptions) {
+		t.Fatalf("gpt-audio native=%v surfaces=%v, whisper-1 native=%v", adapter.NativeSurfaces("gpt-audio"), adapter.Surfaces("gpt-audio"), adapter.NativeSurfaces("whisper-1"))
+	}
+	if core.PreservesWire(adapter, "gpt-audio", transcriptions) || !core.PreservesWire(adapter, "whisper-1", transcriptions) {
+		t.Fatal("the transcription through Chat reads as preserved, or the native one does not")
+	}
+
+	bridged := chatTranscriptionRequest(t, "sample.wav", []byte("RIFFfixture"))
+	bridged.Model = "gpt-audio"
+	response, err := adapter.Invoke(context.Background(), bridged)
+	if err != nil || string(response.Body) != `{"text":"hello"}` {
+		t.Fatalf("through Chat: body=%s err=%v", response.Body, err)
+	}
+	native := chatTranscriptionRequest(t, "sample.wav", []byte("RIFFfixture"))
+	native.Model = "whisper-1"
+	response, err = adapter.Invoke(context.Background(), native)
+	if err != nil || string(response.Body) != `{"text":"native"}` {
+		t.Fatalf("native: body=%s err=%v", response.Body, err)
+	}
+	mu.Lock()
+	sent := slices.Clone(calls)
+	mu.Unlock()
+	if len(sent) != 2 || !strings.HasPrefix(sent[0], "/v1/chat/completions ") || !strings.Contains(sent[0], `"input_audio"`) ||
+		!strings.Contains(sent[0], `"model":"gpt-audio"`) || sent[1] != "/v1/audio/transcriptions "+string(native.Body) {
+		t.Fatalf("upstream = %q", sent)
+	}
+
+	// Transcription through Chat does not stream; a native one is the
+	// provider's to refuse.
+	var surface *core.SurfaceError
+	if _, err := adapter.Stream(context.Background(), bridged); !errors.As(err, &surface) {
+		t.Fatalf("stream through Chat: err = %v", err)
+	}
+	var failure *core.ProviderError
+	if _, err := adapter.Stream(context.Background(), native); !errors.As(err, &failure) || failure.Class != core.ProviderErrorUnsupported {
+		t.Fatalf("native stream: err = %v", err)
 	}
 }

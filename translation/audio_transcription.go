@@ -25,6 +25,13 @@ const defaultTranscriptionInstruction = "Transcribe the supplied audio. Return o
 // Enabled is mandatory and is evaluated for every model. A provider-level
 // opt-in returns true for every model; a model-level opt-in names exact rows.
 // No model-name inference is performed.
+//
+// An enabled model is transcribed through Chat even when the provider lists
+// audio_transcriptions among its native surfaces, as
+// providers.OpenAICompatible does for every model: the opt-in is the
+// product's word that the model transcribes through Chat, so for it the
+// surface is translated, not native. Every other model's native
+// transcription passes through unchanged.
 type ChatTranscriptionAdapter struct {
 	Provider    core.Provider
 	Enabled     func(model string) bool
@@ -38,11 +45,19 @@ func (a ChatTranscriptionAdapter) enabled(model string) bool {
 		core.ServesNatively(a.Provider, model, core.ModelSurfaceChatCompletions)
 }
 
+// NativeSurfaces reports the wrapped provider's native surfaces, less
+// audio_transcriptions for a model the adapter transcribes through Chat.
 func (a ChatTranscriptionAdapter) NativeSurfaces(model string) []core.ModelSurface {
 	if a.Provider == nil {
 		return nil
 	}
-	return a.Provider.NativeSurfaces(model)
+	surfaces := slices.Clone(a.Provider.NativeSurfaces(model))
+	if a.enabled(model) {
+		surfaces = slices.DeleteFunc(surfaces, func(surface core.ModelSurface) bool {
+			return surface == core.ModelSurfaceAudioTranscriptions
+		})
+	}
+	return surfaces
 }
 
 // Surfaces reports translated transcription only for explicitly enabled
@@ -61,7 +76,7 @@ func (a ChatTranscriptionAdapter) Invoke(ctx context.Context, request core.Reque
 	if a.Provider == nil {
 		return core.Response{}, core.NewConfigurationError("the chat transcription adapter has no provider", nil)
 	}
-	if core.ServesNatively(a.Provider, request.Model, request.Surface) {
+	if core.ServesNatively(a, request.Model, request.Surface) {
 		return a.Provider.Invoke(ctx, request)
 	}
 	if request.Surface != core.ModelSurfaceAudioTranscriptions || !a.enabled(request.Model) {
@@ -121,8 +136,10 @@ func (a ChatTranscriptionAdapter) Invoke(ctx context.Context, request core.Reque
 	return core.Response{Body: normalized, ContentType: core.ContentTypeJSON, Losses: response.Losses}, nil
 }
 
+// Stream passes a native surface's stream through. Transcription through
+// Chat does not stream.
 func (a ChatTranscriptionAdapter) Stream(ctx context.Context, request core.Request) (core.StreamIter, error) {
-	if a.Provider != nil && core.ServesNatively(a.Provider, request.Model, request.Surface) {
+	if a.Provider != nil && core.ServesNatively(a, request.Model, request.Surface) {
 		return a.Provider.Stream(ctx, request)
 	}
 	return nil, &core.SurfaceError{Surface: request.Surface, Model: request.Model}

@@ -74,7 +74,12 @@ type OpenAICompatibleConfig struct {
 // Chat Completions is native for every model, and Responses for a model
 // whose catalog row lists it or that the openai registry entry serves. A
 // translation.Adapter in front serves Messages over Chat, and Responses
-// over Chat for the other models.
+// over Chat for the other models. The OpenAI audio surfaces are native for
+// every model too, except on Bedrock: audio_transcriptions forwards the
+// multipart upload unchanged to /audio/transcriptions, and audio_speech
+// the speech JSON, with the request's model, to /audio/speech. Their
+// answers are returned as sent, with the upstream's content type, and
+// neither streams.
 //
 // A credential's API key, or else its token, is the bearer, without any
 // "Bearer " prefix. No key, "free" or "none" sends no Authorization, and
@@ -88,7 +93,7 @@ type OpenAICompatible struct {
 	baseURL, registryID, label string
 	models                     func(string) (core.ModelInfo, bool)
 	headers                    map[string]string
-	forwardAll, adapt          bool
+	forwardAll, adapt, audio   bool
 	client, catalogClient      *http.Client
 	now                        func() time.Time
 }
@@ -108,7 +113,7 @@ func NewOpenAICompatible(config OpenAICompatibleConfig) (*OpenAICompatible, erro
 	p := &OpenAICompatible{
 		baseURL: strings.TrimRight(base, "/"), registryID: strings.ToLower(strings.TrimSpace(config.RegistryID)),
 		label: "OpenAI-compatible", models: config.Models, headers: maps.Clone(config.Headers),
-		forwardAll: config.ForwardAllFields, adapt: config.ForceAPISupport,
+		forwardAll: config.ForwardAllFields, adapt: config.ForceAPISupport, audio: true,
 		client: config.Client, catalogClient: config.CatalogClient, now: config.Now,
 	}
 	if p.client == nil {
@@ -123,13 +128,20 @@ func NewOpenAICompatible(config OpenAICompatibleConfig) (*OpenAICompatible, erro
 	return p, nil
 }
 
-// NativeSurfaces reports Chat Completions for every model, and Responses
-// for a model the openai registry entry serves or whose row lists it.
+// NativeSurfaces reports Chat Completions for every model, Responses for a
+// model the openai registry entry serves or whose row lists it, and the
+// OpenAI audio surfaces, audio_transcriptions and audio_speech, for every
+// model but Bedrock's. Whether the upstream serves a model on the audio
+// endpoints is the upstream's to say, as it is for Chat.
 func (p *OpenAICompatible) NativeSurfaces(model string) []core.ModelSurface {
+	surfaces := []core.ModelSurface{core.ModelSurfaceChatCompletions}
 	if p.responsesNative(model) {
-		return []core.ModelSurface{core.ModelSurfaceChatCompletions, core.ModelSurfaceResponses}
+		surfaces = append(surfaces, core.ModelSurfaceResponses)
 	}
-	return []core.ModelSurface{core.ModelSurfaceChatCompletions}
+	if p.audio {
+		surfaces = append(surfaces, core.ModelSurfaceAudioTranscriptions, core.ModelSurfaceAudioSpeech)
+	}
+	return surfaces
 }
 
 // PreservesWire implements core.WirePreserver. Responses is forwarded as
@@ -138,20 +150,27 @@ func (p *OpenAICompatible) NativeSurfaces(model string) []core.ModelSurface {
 // is converted. Chat that the configured adaptation serves over Responses
 // is converted, so it is not preserved; neither is a request whose own
 // force_api_support turns adaptation on, which this declaration cannot see.
+// The audio surfaces are forwarded as sent too, speech with the request's
+// model, and their answers returned as sent.
 func (p *OpenAICompatible) PreservesWire(model string, surface core.ModelSurface) bool {
 	switch surface {
 	case core.ModelSurfaceResponses:
 		return p.responsesNative(model)
 	case core.ModelSurfaceChatCompletions:
 		return !p.adaptsToResponses(model, p.adapt)
+	case core.ModelSurfaceAudioTranscriptions, core.ModelSurfaceAudioSpeech:
+		return p.audio
 	}
 	return false
 }
 
-// Invoke performs one Chat Completions or Responses request and returns
-// the upstream's answer as sent, or, for Chat that adaptation serves over
-// Responses, the answer converted to Chat.
+// Invoke performs one Chat Completions, Responses or audio request and
+// returns the upstream's answer as sent, or, for Chat that adaptation
+// serves over Responses, the answer converted to Chat.
 func (p *OpenAICompatible) Invoke(ctx context.Context, request core.Request) (core.Response, error) {
+	if p.servesAudio(request.Surface) {
+		return p.invokeAudio(ctx, request)
+	}
 	call, err := p.prepare(request)
 	if err != nil {
 		return core.Response{}, err
@@ -166,8 +185,12 @@ func (p *OpenAICompatible) Invoke(ctx context.Context, request core.Request) (co
 // frames are the upstream's SSE records as sent, [DONE] included; Chat that
 // adaptation serves over Responses streams the complete answer as Chat
 // chunks ending in [DONE], as the gateway does. The stream reports the
-// request's losses through core.LossReporter.
+// request's losses through core.LossReporter. An audio surface does not
+// stream: see audioStreamUnsupported.
 func (p *OpenAICompatible) Stream(ctx context.Context, request core.Request) (core.StreamIter, error) {
+	if p.servesAudio(request.Surface) {
+		return nil, p.audioStreamUnsupported(request.Surface)
+	}
 	call, err := p.prepare(request)
 	if err != nil {
 		return nil, err

@@ -32,6 +32,13 @@ type audioWireFixture struct {
 		InputRole    string `json:"input_role"`
 		Format       string `json:"format"`
 		OutputFormat string `json:"output_format"`
+		// ContentType and BodyBase64, or Body for JSON, are the request
+		// the upstream received, byte for byte; Fields are the form fields
+		// of a multipart body.
+		ContentType string            `json:"content_type"`
+		BodyBase64  string            `json:"body_base64"`
+		Body        json.RawMessage   `json:"body"`
+		Fields      map[string]string `json:"fields"`
 	} `json:"request"`
 	Response struct {
 		Status      int             `json:"status"`
@@ -39,6 +46,7 @@ type audioWireFixture struct {
 		RetryAfter  string          `json:"retry_after"`
 		Body        json.RawMessage `json:"body"`
 		BodyBase64  string          `json:"body_base64"`
+		BodyText    string          `json:"body_text"`
 	} `json:"response"`
 }
 
@@ -70,6 +78,10 @@ func writeAudioFixture(t *testing.T, w http.ResponseWriter, fixture audioWireFix
 			t.Error(err)
 		}
 		_, _ = w.Write(body)
+		return
+	}
+	if fixture.Response.BodyText != "" {
+		_, _ = w.Write([]byte(fixture.Response.BodyText))
 		return
 	}
 	_, _ = w.Write(fixture.Response.Body)

@@ -21,6 +21,10 @@ const BedrockDefaultRegion = "us-east-1"
 // does for any OpenAI-compatible upstream: nothing is signed and no AWS SDK
 // is needed. A region that is not a region name is refused before any
 // request, so a key never reaches a host the region did not name.
+//
+// Bedrock's OpenAI-compatible endpoint has no audio API, so the provider
+// serves neither audio surface: a request for one fails with a
+// *core.SurfaceError before anything is sent.
 func NewBedrock(region, baseURL string, config OpenAICompatibleConfig) (*OpenAICompatible, error) {
 	config.BaseURL = strings.TrimSpace(baseURL)
 	if config.BaseURL == "" {
@@ -37,7 +41,7 @@ func NewBedrock(region, baseURL string, config OpenAICompatibleConfig) (*OpenAIC
 	if err != nil {
 		return nil, err
 	}
-	provider.label = "Bedrock"
+	provider.label, provider.audio = "Bedrock", false
 	return provider, nil
 }
 

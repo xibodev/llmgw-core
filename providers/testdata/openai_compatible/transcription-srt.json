@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/audio/transcriptions",
+    "content_type": "multipart/form-data; boundary=------------------------d74496d66958873e",
+    "body_base64": "LS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS1kNzQ0OTZkNjY5NTg4NzNlDQpDb250ZW50LURpc3Bvc2l0aW9uOiBmb3JtLWRhdGE7IG5hbWU9ImZpbGUiOyBmaWxlbmFtZT0ic2FtcGxlLndhdiINCkNvbnRlbnQtVHlwZTogYXVkaW8vd2F2DQoNClJJRkYoAAAAV0FWRWZtdCAQAAAAAQABAIA+AAAAfQAAAgAQAGRhdGEEAAAAAID/fw0KLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS1kNzQ0OTZkNjY5NTg4NzNlDQpDb250ZW50LURpc3Bvc2l0aW9uOiBmb3JtLWRhdGE7IG5hbWU9Im1vZGVsIg0KDQp3aGlzcGVyLTENCi0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tZDc0NDk2ZDY2OTU4ODczZQ0KQ29udGVudC1EaXNwb3NpdGlvbjogZm9ybS1kYXRhOyBuYW1lPSJyZXNwb25zZV9mb3JtYXQiDQoNCnNydA0KLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS1kNzQ0OTZkNjY5NTg4NzNlLS0NCg==",
+    "model": "whisper-1",
+    "file_name": "sample.wav",
+    "file_base64": "UklGRigAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQQAAAAAgP9/",
+    "fields": {
+      "model": "whisper-1",
+      "response_format": "srt"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "text/plain; charset=utf-8",
+    "body_text": "1\n00:00:00,000 --> 00:00:01,000\nHello from the fixture.\n\n"
+  }
+}

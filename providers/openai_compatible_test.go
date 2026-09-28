@@ -208,21 +208,22 @@ func TestOpenAICompatibleSurfacesFollowTheCatalogRow(t *testing.T) {
 		"ws": {SupportedAPIs: []string{" WS:/responses "}}, "chat": {SupportedAPIs: []string{"/chat/completions"}},
 	})
 	chat, responses, messages := core.ModelSurfaceChatCompletions, core.ModelSurfaceResponses, core.ModelSurfaceMessages
+	transcriptions, speech := core.ModelSurfaceAudioTranscriptions, core.ModelSurfaceAudioSpeech
 	for _, test := range []struct {
 		config OpenAICompatibleConfig
 		model  string
 		native []core.ModelSurface
 		chat   bool
 	}{
-		{OpenAICompatibleConfig{Models: rows}, "responses", []core.ModelSurface{chat, responses}, true},
-		{OpenAICompatibleConfig{Models: rows}, "both", []core.ModelSurface{chat, responses}, true},
-		{OpenAICompatibleConfig{Models: rows}, "ws", []core.ModelSurface{chat, responses}, true},
-		{OpenAICompatibleConfig{Models: rows}, "chat", []core.ModelSurface{chat}, true},
-		{OpenAICompatibleConfig{Models: rows}, "unlisted", []core.ModelSurface{chat}, true},
-		{OpenAICompatibleConfig{}, "responses", []core.ModelSurface{chat}, true},
-		{OpenAICompatibleConfig{RegistryID: " OpenAI "}, "future-model", []core.ModelSurface{chat, responses}, true},
-		{OpenAICompatibleConfig{Models: rows, ForceAPISupport: true}, "responses", []core.ModelSurface{chat, responses}, false},
-		{OpenAICompatibleConfig{Models: rows, ForceAPISupport: true}, "both", []core.ModelSurface{chat, responses}, true},
+		{OpenAICompatibleConfig{Models: rows}, "responses", []core.ModelSurface{chat, responses, transcriptions, speech}, true},
+		{OpenAICompatibleConfig{Models: rows}, "both", []core.ModelSurface{chat, responses, transcriptions, speech}, true},
+		{OpenAICompatibleConfig{Models: rows}, "ws", []core.ModelSurface{chat, responses, transcriptions, speech}, true},
+		{OpenAICompatibleConfig{Models: rows}, "chat", []core.ModelSurface{chat, transcriptions, speech}, true},
+		{OpenAICompatibleConfig{Models: rows}, "unlisted", []core.ModelSurface{chat, transcriptions, speech}, true},
+		{OpenAICompatibleConfig{}, "responses", []core.ModelSurface{chat, transcriptions, speech}, true},
+		{OpenAICompatibleConfig{RegistryID: " OpenAI "}, "future-model", []core.ModelSurface{chat, responses, transcriptions, speech}, true},
+		{OpenAICompatibleConfig{Models: rows, ForceAPISupport: true}, "responses", []core.ModelSurface{chat, responses, transcriptions, speech}, false},
+		{OpenAICompatibleConfig{Models: rows, ForceAPISupport: true}, "both", []core.ModelSurface{chat, responses, transcriptions, speech}, true},
 	} {
 		test.config.BaseURL = "https://upstream.example.test/v1"
 		provider, err := NewOpenAICompatible(test.config)
@@ -232,6 +233,7 @@ func TestOpenAICompatibleSurfacesFollowTheCatalogRow(t *testing.T) {
 		native := provider.NativeSurfaces(test.model)
 		if !reflect.DeepEqual(native, test.native) || core.PreservesWire(provider, test.model, chat) != test.chat ||
 			core.PreservesWire(provider, test.model, responses) != slices.Contains(test.native, responses) ||
+			!core.PreservesWire(provider, test.model, transcriptions) || !core.PreservesWire(provider, test.model, speech) ||
 			core.PreservesWire(provider, test.model, messages) {
 			t.Fatalf("%s %+v: surfaces = %v", test.model, test.config, native)
 		}
